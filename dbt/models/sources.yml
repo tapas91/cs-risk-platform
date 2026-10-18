@@ -1,0 +1,28 @@
+version: 2
+sources:
+  - name: bronze
+    description: Append-only copies of the landed files, written by pipeline/bronze.py. One row per landed row.
+    schema: bronze
+    tables:
+      - name: _ingested_files
+        description: Manifest of every file loaded, so each file is loaded exactly once.
+      - name: salesforce__account
+      - name: salesforce__contact
+      - name: salesforce__user
+      - name: salesforce__opportunity
+      - name: salesforce__task
+      - name: zendesk__organization
+      - name: zendesk__ticket
+      - name: zendesk__ticket_comment
+      - name: stripe__customer
+      - name: stripe__subscription
+      - name: stripe__invoice
+      - name: stripe__charge
+      - name: product__workspace
+      - name: product__event
+      - name: gmail__message
+  - name: ops
+    schema: ops
+    tables:
+      - name: schema_changes
+        description: Columns added or widened by the bronze loader.

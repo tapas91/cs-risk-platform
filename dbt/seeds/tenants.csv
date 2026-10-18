@@ -1,0 +1,5 @@
+tenant_id,tenant_name,product,internal_domain,timezone,connector_setup_date
+northwind,Northwind Analytics,Northwind Insights,northwind-analytics.io,-05:00,2023-10-15
+helio,Helio HR,Helio People,heliohr.co.uk,+00:00,2023-10-15
+brightpath,Brightpath Learning,Brightpath Classroom,brightpath.education,+05:30,2023-10-15
+quarry,Quarry Logistics,Quarry Dispatch,quarrylogistics.de,+01:00,2023-10-15

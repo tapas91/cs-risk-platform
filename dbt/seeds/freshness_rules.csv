@@ -1,0 +1,8 @@
+source_table,warn_after_hours,error_after_hours,note
+product__event,24,72,steady usage stream
+gmail__message,48,120,CSM and AE mailboxes
+zendesk__ticket,48,120,
+zendesk__ticket_comment,48,120,
+stripe__invoice,120,336,billing is lumpy; a week without invoices is normal for small tenants
+stripe__charge,120,336,
+salesforce__opportunity,120,336,

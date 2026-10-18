@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.DS_Store
+warehouse/*.duckdb*
+landing/
+.landing-staging/
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+lake_sample/
+models_store/
+dbt/.user.yml
+.env
+.streamlit/secrets.toml
+*.duckdb.tmp
+gen_err.log

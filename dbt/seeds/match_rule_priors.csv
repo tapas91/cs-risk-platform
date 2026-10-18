@@ -1,0 +1,15 @@
+source_system,match_method,prior_confidence,rule
+salesforce.account,sfdc_id,1.00,The Salesforce record itself (system of record; never measured)
+salesforce.account,sfdc_merge,1.00,A merged duplicate's ID redirected to its master
+stripe.customer,stripe_metadata,0.99,metadata_sfdc_account_id is a live account
+stripe.customer,stripe_metadata_merged,0.95,metadata_sfdc_account_id is a merged duplicate; redirected
+stripe.customer,contact_email,0.90,Billing email is a Salesforce contact's email
+stripe.customer,email_domain,0.80,Billing email domain belongs to exactly one account
+stripe.customer,name,0.70,Normalised name matches exactly one account
+zendesk.organization,zendesk_external_id,0.99,external_id is a live account
+zendesk.organization,zendesk_external_id_merged,0.95,external_id is a merged duplicate; redirected
+zendesk.organization,org_domain,0.85,An organisation domain belongs to exactly one account
+zendesk.organization,name,0.70,Normalised name matches exactly one account
+product.workspace,workspace_account_id,0.99,sfdc_account_id is a live account
+product.workspace,workspace_account_id_merged,0.95,sfdc_account_id is a merged duplicate; redirected
+product.workspace,name,0.70,Workspace name matches exactly one account

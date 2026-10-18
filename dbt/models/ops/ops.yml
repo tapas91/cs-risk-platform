@@ -1,0 +1,14 @@
+version: 2
+models:
+  - name: source_freshness
+    description: Lag of each tenant's feeds behind that tenant's newest sync, scored against seeds/freshness_rules.csv.
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, source_table]}}
+  - name: quarantine_identity
+    description: Customer records that could not be tied to one account.
+  - name: match_precision
+    description: Measured precision of each account-match rule on the labeled sample, and the confidence account_xref uses.
+    tests:
+      - unique_combination: {arguments: {columns: [source_system, match_method]}}
+  - name: quarantine_parsing
+    description: Unparseable dates and timestamps.

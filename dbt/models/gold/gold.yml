@@ -1,0 +1,19 @@
+version: 2
+models:
+  - name: as_of_dates
+    tests:
+      - unique_combination: {arguments: {columns: [as_of, purpose]}}
+  - name: account_spine
+    description: Live customers on each as-of date, with the CRM state known at that moment.
+    tests:
+      - unique_combination: {arguments: {columns: [as_of, purpose, tenant_id, account_id]}}
+  - name: account_outcomes
+    description: Churn and downsell events as recorded by the source systems.
+  - name: account_labels
+    description: Whether churn or downsell followed each as-of date within the horizon.
+    tests:
+      - unique_combination: {arguments: {columns: [as_of, tenant_id, account_id]}}
+  - name: account_features
+    description: Point-in-time model inputs per account and as-of date, plus notices and lineage.
+    tests:
+      - unique_combination: {arguments: {columns: [as_of, purpose, tenant_id, account_id]}}

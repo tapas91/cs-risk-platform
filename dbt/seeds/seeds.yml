@@ -1,0 +1,14 @@
+version: 2
+seeds:
+  - name: identity_labels
+    description: >
+      Labeled sample of identity matches (written by scripts/label_matches.py). Each row says which
+      account a source record truly belongs to. Starts empty; until a rule has enough labels its
+      confidence falls back to its prior.
+    config:
+      column_types: {tenant_id: varchar, source_system: varchar, source_id: varchar, true_account_id: varchar,
+                     stratum: varchar, labeled_by: varchar}
+  - name: match_rule_priors
+    description: Every match rule, with the confidence assumed before any labels exist.
+    config:
+      column_types: {source_system: varchar, match_method: varchar, prior_confidence: double, rule: varchar}

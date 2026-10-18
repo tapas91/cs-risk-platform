@@ -1,0 +1,273 @@
+{
+  "SEED": 42,
+  "WINDOW_START": "2023-10-15",
+  "WINDOW_END": "2026-10-14",
+  "FULL_ACCOUNTS": 5000,
+  "FULL_EVENTS": 200000,
+  "STREAM_TARGETS": {
+    "zendesk.ticket": 7000,
+    "zendesk.ticket_comment": 12000,
+    "gmail.message_outbound": 11000,
+    "salesforce.task": 1500
+  },
+  "PRODUCT_MIN_SHARE": 0.4,
+  "TENANTS": [
+    {
+      "key": "northwind",
+      "code": "NW",
+      "name": "Northwind Analytics",
+      "product": "Northwind Insights",
+      "domain": "northwind-analytics.io",
+      "share": 0.48,
+      "csms": 20,
+      "aes": 10,
+      "tz": "-05:00",
+      "currencies": {
+        "USD": 0.85,
+        "EUR": 0.15
+      },
+      "monthly_share": 0.02,
+      "seasonality": "standard",
+      "connector_setup": "2023-10-15",
+      "features": [
+        "dashboards",
+        "scheduled reports",
+        "the SQL editor",
+        "data alerts",
+        "embedded charts"
+      ],
+      "integrations": [
+        "Snowflake",
+        "BigQuery",
+        "Salesforce",
+        "Slack",
+        "HubSpot"
+      ]
+    },
+    {
+      "key": "helio",
+      "code": "HE",
+      "name": "Helio HR",
+      "product": "Helio People",
+      "domain": "heliohr.co.uk",
+      "share": 0.3,
+      "csms": 12,
+      "aes": 6,
+      "tz": "+00:00",
+      "currencies": {
+        "GBP": 0.6,
+        "EUR": 0.3,
+        "USD": 0.1
+      },
+      "monthly_share": 0.07,
+      "seasonality": "standard",
+      "connector_setup": "2023-10-15",
+      "features": [
+        "payroll exports",
+        "leave management",
+        "performance reviews",
+        "onboarding checklists",
+        "org charts"
+      ],
+      "integrations": [
+        "Xero",
+        "Okta",
+        "Slack",
+        "Microsoft Teams",
+        "Workday"
+      ]
+    },
+    {
+      "key": "brightpath",
+      "code": "BP",
+      "name": "Brightpath Learning",
+      "product": "Brightpath Classroom",
+      "domain": "brightpath.education",
+      "share": 0.16,
+      "csms": 7,
+      "aes": 4,
+      "tz": "+05:30",
+      "currencies": {
+        "USD": 0.7,
+        "GBP": 0.3
+      },
+      "monthly_share": 0.02,
+      "seasonality": "academic",
+      "connector_setup": "2023-10-15",
+      "features": [
+        "gradebook",
+        "assignment builder",
+        "parent portal",
+        "attendance tracking",
+        "course templates"
+      ],
+      "integrations": [
+        "Google Classroom",
+        "Canvas",
+        "Clever",
+        "Microsoft Teams",
+        "Zoom"
+      ]
+    },
+    {
+      "key": "quarry",
+      "code": "QU",
+      "name": "Quarry Logistics",
+      "product": "Quarry Dispatch",
+      "domain": "quarrylogistics.de",
+      "share": 0.06,
+      "csms": 3,
+      "aes": 2,
+      "tz": "+01:00",
+      "currencies": {
+        "EUR": 0.8,
+        "USD": 0.2
+      },
+      "monthly_share": 0.03,
+      "seasonality": "standard",
+      "connector_setup": "2023-10-15",
+      "features": [
+        "route planning",
+        "driver app",
+        "proof of delivery",
+        "load board",
+        "ETA notifications"
+      ],
+      "integrations": [
+        "SAP",
+        "Samsara",
+        "Geotab",
+        "Slack",
+        "Shopify"
+      ]
+    }
+  ],
+  "PROSPECT_SHARE": 0.18,
+  "PROSPECT_OUTCOMES": {
+    "lost": 0.55,
+    "open": 0.25,
+    "nurture": 0.2
+  },
+  "LOST_REASONS": {
+    "Price": 0.3,
+    "Competitor": 0.25,
+    "No Decision": 0.2,
+    "Missing Feature": 0.15,
+    "Timing / Budget": 0.1
+  },
+  "CUSTOMER_ACQUIRED_IN_WINDOW": 0.4,
+  "ARCHETYPES": {
+    "healthy": 0.4,
+    "expanding": 0.1,
+    "seasonal": 0.07,
+    "noisy_loyal": 0.05,
+    "slow_decline": 0.1,
+    "champion_loss": 0.06,
+    "support_crisis": 0.06,
+    "payment_failure": 0.04,
+    "silent_churn": 0.03,
+    "dormant": 0.09
+  },
+  "TIERS": {
+    "enterprise": 0.15,
+    "mid": 0.4,
+    "smb": 0.45
+  },
+  "SEATS": {
+    "enterprise": [
+      80,
+      600
+    ],
+    "mid": [
+      15,
+      120
+    ],
+    "smb": [
+      2,
+      20
+    ]
+  },
+  "PRICE_PER_SEAT_YEAR": {
+    "enterprise": 420,
+    "mid": 360,
+    "smb": 300
+  },
+  "DEFECTS": {
+    "late_arrival_rate": 0.04,
+    "very_late_rate": 0.005,
+    "duplicate_rate_product": 0.015,
+    "duplicate_rate_gmail": 0.005,
+    "clock_skew_rate": 0.002,
+    "soft_delete_rate_ticket": 0.005,
+    "sfdc_duplicate_account_rate": 0.03,
+    "stripe_missing_sfdc_id": 0.06,
+    "stripe_stale_sfdc_id": 0.02,
+    "stripe_duplicate_customer": 0.02,
+    "workspace_missing_account": 0.05,
+    "trial_workspace_missing_account": 0.6,
+    "zendesk_org_external_id_missing": 0.4,
+    "zendesk_org_coverage": 0.92,
+    "personal_email_domain_accounts": 0.03,
+    "test_account_rate": 0.005,
+    "null_arr": 0.03,
+    "null_renewal_date": 0.04,
+    "null_industry": 0.15,
+    "csm_departure_rate": 0.15
+  },
+  "FEED_OUTAGES": [
+    {
+      "tenant": "helio",
+      "table": "zendesk.ticket",
+      "start": "2025-11-03",
+      "end": "2025-11-24",
+      "kind": "delayed"
+    },
+    {
+      "tenant": "helio",
+      "table": "zendesk.ticket_comment",
+      "start": "2025-11-03",
+      "end": "2025-11-24",
+      "kind": "delayed"
+    },
+    {
+      "tenant": "northwind",
+      "table": "product.event",
+      "start": "2026-03-09",
+      "end": "2026-03-14",
+      "kind": "lost"
+    },
+    {
+      "tenant": "brightpath",
+      "table": "gmail.message",
+      "start": "2026-05-18",
+      "end": "2026-06-08",
+      "kind": "delayed"
+    },
+    {
+      "tenant": "quarry",
+      "table": "stripe.invoice",
+      "start": "2026-09-21",
+      "end": "2026-11-30",
+      "kind": "delayed"
+    },
+    {
+      "tenant": "quarry",
+      "table": "stripe.charge",
+      "start": "2026-09-21",
+      "end": "2026-11-30",
+      "kind": "delayed"
+    }
+  ],
+  "CROSS_TENANT_COMPANY_RATE": 0.006,
+  "PARENT_CHILD_RATE": 0.04,
+  "PROMPT_INJECTION_RATE": 0.002,
+  "INTERVENTION_RATE": {
+    "recovered": 0.8,
+    "churned": 0.3,
+    "at_risk": 0.2
+  },
+  "PRODUCT_RENAME_DATE": "2024-07-01",
+  "ZENDESK_CUSTOM_FIELD_DATE": "2025-02-01",
+  "LLM_TEXT_SHARE": 0.35,
+  "PARTITION_GRAIN": "month"
+}

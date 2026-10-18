@@ -1,0 +1,40 @@
+name: cs_risk
+version: "1.0.0"
+config-version: 2
+profile: cs_risk
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+target-path: target
+clean-targets: [target, dbt_packages]
+
+vars:
+  # a match rule whose confidence (ops.match_precision) is below this stops matching; records it would
+  # have matched fall to the next rule or to ops.quarantine_identity
+  min_match_confidence: 0.7
+  # a rule's confidence switches from its prior to its measured precision at this many labels
+  min_labels_per_rule: 30
+  # risk model: predict churn or downsell within this many days of the as-of date
+  label_horizon_days: 90
+  first_training_as_of: '2024-01-01'
+
+models:
+  cs_risk:
+    staging:
+      +schema: staging
+      +materialized: view
+    silver:
+      +schema: silver
+      +materialized: table
+    ops:
+      +schema: ops
+      +materialized: table
+    gold:
+      +schema: gold
+      +materialized: table
+
+seeds:
+  cs_risk:
+    +schema: reference

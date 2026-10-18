@@ -1,0 +1,99 @@
+# Local stack: landing folder (stands in for the S3 bucket) -> Airflow -> DuckDB (bronze, silver, ops).
+#   docker compose up -d --build
+#   Airflow UI  http://localhost:8080   (admin / admin)
+#   Dashboard   http://localhost:8501
+# scripts/land.py plays Fivetran: it moves generated files into ./landing month by month.
+
+x-airflow-common: &airflow-common
+  image: cs-risk-airflow:local
+  build: ./airflow
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+    AIRFLOW__WEBSERVER__SECRET_KEY: local-dev-only
+    PYTHONPATH: /opt/airflow
+    WAREHOUSE_PATH: /opt/airflow/warehouse/warehouse.duckdb
+    DBT_PROJECT_DIR: /opt/airflow/dbt
+    MODEL_DIR: /opt/airflow/models_store
+    # A local path today. Set to s3://bucket/prefix (plus S3_* credentials) to read a real bucket.
+    LANDING_URI: /opt/airflow/landing
+    # Secrets are injected at runtime, never baked into the image. Compose reads them from your
+    # shell or from .env (git-ignored); the agent runs in fallback mode when the key is empty.
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5-5}
+    AGENT_MAX_CASES: ${AGENT_MAX_CASES:-12}   # accounts the agent reviews per run (cost cap)
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./pipeline:/opt/airflow/pipeline
+    - ./dbt:/opt/airflow/dbt
+    - ./warehouse:/opt/airflow/warehouse
+    - ./landing:/opt/airflow/landing:ro
+    - ./models_store:/opt/airflow/models_store
+    - airflow-logs:/opt/airflow/logs
+  depends_on: &airflow-depends
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate &&
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true &&
+        airflow pools set duckdb 1 "DuckDB allows one writer: every warehouse task uses this pool"
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Read-only CSM dashboard. Mounts the warehouse folder read-only and opens only the published snapshot.
+  dashboard:
+    build: ./dashboard
+    image: cs-risk-dashboard:local
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./app:/srv/app:ro
+      - ./tests:/srv/tests:ro
+      - ./.streamlit:/srv/.streamlit:ro
+      - ./warehouse:/srv/warehouse:ro
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  airflow-logs:

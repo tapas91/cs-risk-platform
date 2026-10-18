@@ -1,0 +1,10 @@
+cs_risk:
+  target: prod
+  outputs:
+    prod:
+      type: duckdb
+      path: "{{ env_var('WAREHOUSE_PATH', '../warehouse/warehouse.duckdb') }}"
+      schema: silver
+      threads: 1   # one writer: DuckDB allows a single read-write connection
+      settings:
+        TimeZone: UTC

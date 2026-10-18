@@ -1,0 +1,88 @@
+version: 2
+
+models:
+  - name: dim_account_history
+    description: Salesforce accounts by version, with source-time validity and arrival time.
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, account_id, valid_from]}}
+    columns:
+      - name: tenant_id
+        tests: [not_null]
+      - name: account_type
+        tests:
+          - accepted_values: {arguments: {values: ['Prospect', 'Customer', 'Former Customer']}}
+  - name: dim_account
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, account_id]}}
+  - name: dim_contact_history
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, contact_id, valid_from]}}
+  - name: dim_user
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, user_id]}}
+  - name: account_domain
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, domain]}}
+  - name: account_match_candidates
+    description: Every rule-based match a source record produced; account_xref keeps one per record.
+  - name: account_xref
+    description: Account master. One row per source record that maps to a customer, with the rule used and its confidence.
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, source_system, source_id]}}
+    columns:
+      - name: account_id
+        tests:
+          - not_null
+          - relationships: {arguments: {to: ref('dim_account'), field: account_id}}
+      - name: confidence
+        tests: [not_null]
+      - name: confidence_source
+        tests:
+          - accepted_values: {arguments: {values: ['measured', 'prior']}}
+  - name: dim_workspace_history
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, workspace_id, valid_from]}}
+  - name: dim_subscription_history
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, subscription_id, valid_from]}}
+  - name: dim_opportunity_history
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, opportunity_id, valid_from]}}
+  - name: fct_product_event
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, event_id]}}
+    columns:
+      - name: event_name
+        tests:
+          - relationships: {arguments: {to: ref('event_name_map'), field: event_name}}
+  - name: fct_ticket
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, ticket_id]}}
+    columns:
+      - name: status
+        tests:
+          - accepted_values: {arguments: {values: ['new', 'open', 'pending', 'hold', 'solved', 'closed']}}
+  - name: fct_ticket_status_change
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, ticket_id, changed_at]}}
+  - name: fct_ticket_comment
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, comment_id]}}
+  - name: fct_email_message
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, message_id]}}
+  - name: fct_invoice
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, invoice_id]}}
+  - name: fct_charge
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, charge_id]}}
+  - name: fct_activity
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, task_id]}}
+    columns:
+      - name: activity_date
+        tests: [not_null]
+  - name: fct_opportunity_stage_change
+    tests:
+      - unique_combination: {arguments: {columns: [tenant_id, opportunity_id, changed_at]}}
