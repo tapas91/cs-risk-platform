@@ -2,7 +2,9 @@
 
     $ML_PYTHON -m pipeline.agent                 # runs after every scoring run (Airflow: account_agent)
     AGENT_MAX_CASES=3 $ML_PYTHON -m pipeline.agent
-    $ML_PYTHON -m pipeline.agent --account northwind/001NW...   # review one account on demand
+    $ML_PYTHON -m pipeline.agent --account northwind/001NW...   # one account (or AGENT_ACCOUNT=...)
+On demand, prefer `airflow dags trigger account_agent --conf '{"account": "northwind/001NW..."}'`: run
+directly, the agent opens the warehouse outside Airflow's duckdb pool and a pipeline task can fail on the lock.
 
 What it does, per run:
   1. Triage (SQL, no model): from the latest scores, pick accounts that newly gave notice, newly entered
@@ -42,7 +44,10 @@ PRICE_PER_MTOK = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.
 
 ROUTES = ["csm_task", "billing_queue", "suppress", "data_quality", "no_action"]
 INTERNAL_TERMS = re.compile(r"\b(churn\w*|risk\w*|score\w*|model|probabilit\w*|red|yellow|band|at-risk|health score|internal)\b", re.I)
-NUMBER = re.compile(r"\$?\d[\d,]*(?:\.\d+)?%?")
+# Numbers a brief may state. A date is one token; evidence IDs (E17) and digits inside words (Q3, v2) aren't numbers.
+DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+EVIDENCE_ID = re.compile(r"\bE\d+\b")
+NUMBER = re.compile(r"(?<![\w.])\d+(?:,\d{3})*(?:\.\d+)?(?![\w])")
 
 SYSTEM = """You review one customer account at a time for a customer success (CS) team and decide what should happen next.
 
@@ -148,6 +153,8 @@ def triage(con):
 
 def on_demand(con, ref: str):
     """One account, from its latest score, regardless of triage. Replaces any case already written for that date."""
+    if "/" not in ref:
+        sys.exit(f"account must be <tenant>/<account_id>, got {ref!r}")
     tenant_id, account_id = ref.split("/", 1)
     rows = con.execute("""select *, null::double as prev_prob, 'on_demand' as trigger from ml.risk_scores
                           where tenant_id = ? and account_id = ? order by as_of desc limit 1""", [tenant_id, account_id]).df()
@@ -161,8 +168,15 @@ def on_demand(con, ref: str):
 
 # ------------------------------------------------------------------ validation
 
-def _norm(s: str) -> str:
-    return s.replace(",", "").replace("$", "")
+def numbers(text: str) -> set:
+    """The numbers stated in a text, as comparable values: "$1,200" and "1200" are the same, "3" isn't "30"."""
+    dates = set(DATE.findall(text))
+    rest = EVIDENCE_ID.sub(" ", DATE.sub(" ", text))
+    values = set()
+    for n in NUMBER.findall(rest):
+        v = n.replace(",", "")
+        values.add(v.rstrip("0").rstrip(".") if "." in v else v.lstrip("0") or "0")
+    return dates | values
 
 
 def validate(decision: dict, case: Case, status: str) -> list:
@@ -179,11 +193,9 @@ def validate(decision: dict, case: Case, status: str) -> list:
             errors.append(f"brief sentence {i} cites no evidence")
         if missing:
             errors.append(f"brief sentence {i} cites unknown evidence {missing}")
-        pool = _norm(" ".join(c["fact"] for c in cited))
-        for n in NUMBER.findall(s["text"]):
-            core = _norm(n).rstrip("%")
-            if core and core not in pool:
-                errors.append(f"brief sentence {i}: the number {n} does not appear in its cited facts")
+        stated = numbers(" ".join(c["fact"] for c in cited))
+        for n in sorted(numbers(s["text"]) - stated):
+            errors.append(f"brief sentence {i}: the number {n} does not appear in its cited facts")
     texts = " ".join(e["fact"] for e in case.evidence).lower()
     route = decision["route"]
     if route == "billing_queue" and not re.search(r"[1-9]\d* failed card payments|past_due", texts):
@@ -361,7 +373,8 @@ def main():
         client = anthropic.Anthropic(max_retries=3)
     con = duckdb.connect(WAREHOUSE, config={"TimeZone": "UTC"})
     ensure_schema(con)
-    queue = on_demand(con, sys.argv[sys.argv.index("--account") + 1]) if "--account" in sys.argv else triage(con)
+    account = sys.argv[sys.argv.index("--account") + 1] if "--account" in sys.argv else os.environ.get("AGENT_ACCOUNT", "")
+    queue = on_demand(con, account) if account else triage(con)
     tenants = dict(con.execute("select tenant_id, tenant_name from reference.tenants").fetchall())
     csms = {(t, u): n for t, u, n in con.execute("select tenant_id, user_id, user_name from silver.dim_user").fetchall()}
     print(f"run {run_id}: {len(queue)} accounts to review, mode {'llm ' + MODEL if client else 'fallback (no API key)'}")

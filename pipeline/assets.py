@@ -1,4 +1,5 @@
-"""Airflow Datasets that chain the DAGs: bronze_ingest -> BRONZE -> silver_build -> SILVER -> risk_model -> RISK -> account_agent."""
+"""Airflow Datasets that chain the DAGs: bronze_ingest -> BRONZE -> silver_build -> SILVER -> risk_scoring -> RISK -> account_agent.
+risk_training runs on its own monthly schedule and only changes which model risk_scoring uses."""
 from airflow.datasets import Dataset
 
 BRONZE = Dataset("duckdb://warehouse/bronze")

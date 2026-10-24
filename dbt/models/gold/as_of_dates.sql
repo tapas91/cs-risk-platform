@@ -1,6 +1,6 @@
 -- The dates the model looks at the world from.
 --   train: first of every month whose 90-day outcome window has fully passed by the data date
---   score: every Monday of the last 13 weeks plus the data date itself (for week-on-week movement)
+--   score: the data date and the 13 weeks before it, 7 days apart (for week-on-week movement)
 -- data_as_of is the newest arrival in the warehouse, not the clock: this dataset is a fixed dump.
 {% set horizon = var('label_horizon_days') %}
 with watermark as (

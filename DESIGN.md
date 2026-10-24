@@ -57,8 +57,9 @@ An account's state is four layers, each answering a different question:
 
 ### How unattended work is triggered
 1. `bronze_ingest` runs every 15 minutes, and stops at its first task if nothing new landed.
-2. Each later DAG runs because the previous one **changed data** (Airflow datasets), not on a clock: `silver_build` → `risk_model` (features, retrain, gate, score) → `account_agent` (review, publish dashboard snapshot).
-3. **Gates:**
+2. Each later DAG runs because the previous one **changed data** (Airflow datasets), not on a clock: `silver_build` → `risk_scoring` (features, score with the production model) → `account_agent` (review, publish dashboard snapshot).
+3. **Training is separate and monthly** (`risk_training`). Labels take 90 days to mature, so retraining on every sync adds nothing and would change every score. A failed retrain never stops scoring.
+4. **Gates:**
    - dbt tests fail a bad silver build;
    - a retrained model reaches production only if it beats the rules baseline and doesn't lose more than 0.005 PR-AUC to production;
    - the agent reviews at most 12 accounts per run, 3 per CSM.

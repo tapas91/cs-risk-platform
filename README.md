@@ -4,15 +4,16 @@ Synthetic customer-success data for four B2B SaaS tenants, a DuckDB warehouse bu
 dbt, and a fitted churn-risk model that ranks each CSM's accounts every time new data lands.
 
 ```
-lake/ --land.py--> landing/ --bronze_ingest--> bronze --silver_build (dbt)--> silver --risk_model--> gold features
-(generated)        ("bucket")  every 15 min      exact copy   on BRONZE         typed,      on SILVER   -> train + gate
-                                                                                matched,                -> ml.risk_scores
-                                                                                history kept               ml.risk_reasons
+lake/ --land.py--> landing/ --bronze_ingest--> bronze --silver_build (dbt)--> silver --risk_scoring--> gold features
+(generated)        ("bucket")  every 15 min      exact copy   on BRONZE         typed,      on SILVER     -> ml.risk_scores
+                                                                                matched,                     ml.risk_reasons
+                                                                                history kept  risk_training (monthly) -> train + gate
 ```
 
 Each DAG triggers the next through Airflow datasets: `bronze_ingest` → `BRONZE` → `silver_build`
-→ `SILVER` → `risk_model` → `RISK` → `account_agent`, which ends by publishing the dashboard's snapshot. Every warehouse task shares one single-slot pool, because
-DuckDB allows one writer.
+→ `SILVER` → `risk_scoring` → `RISK` → `account_agent`, which ends by publishing the dashboard's snapshot.
+`risk_training` retrains monthly and only changes which model `risk_scoring` uses, so a failed retrain
+never stops scoring. Every warehouse task shares one single-slot pool, because DuckDB allows one writer.
 
 ## Run it
 
@@ -21,13 +22,18 @@ docker compose up -d --build            # Airflow http://localhost:8080 (admin /
 python3 scripts/land.py --until 2024-12 # land the first files; the 15-minute schedule picks them up
 python3 scripts/land.py --next          # land the next synced month (new and late files)
 python3 scripts/land.py --all           # land the rest
+docker compose exec airflow-scheduler airflow dags trigger risk_training   # first model; scoring skips until one exists
 .venv/bin/python scripts/verify_warehouse.py   # warehouse checks against the lake and ground truth
 .venv/bin/python scripts/evaluate_model.py     # model report against ground truth -> MODEL_REPORT.md
 ```
 
 To skip waiting for the schedule: `docker compose exec airflow-scheduler airflow dags trigger bronze_ingest`.
-Query the warehouse with `duckdb -readonly warehouse/warehouse.duckdb`. Read-only matters: DuckDB
-allows one writer, and a read-write session blocks the DAGs.
+`risk_scoring` and `risk_training` are created paused: unpause them in the UI or with `airflow dags unpause`.
+
+Query the published copy, not the live warehouse: `duckdb -readonly warehouse/snapshot.duckdb`.
+DuckDB lets one process open a file read-write, or several open it read-only, never both at once. Any
+session on `warehouse.duckdb`, read-only included (a SQL client, an editor extension, a notebook),
+makes the next pipeline task fail to open it until the session closes.
 
 To regenerate the source data: `.venv/bin/python -m datagen.generate --scale 1.0 --out lake` (see [datagen/README.md](datagen/README.md)).
 
@@ -40,12 +46,12 @@ To regenerate the source data: `.venv/bin/python -m datagen.generate --scale 1.0
 | `dashboard_data/` | Slim snapshot the hosted dashboard reads (`pipeline/snapshot.py --slim`) |
 | `landing/` | The "bucket" Airflow reads. `LANDING_URI` can point at `s3://…` instead |
 | `pipeline/bronze.py` | File discovery, exactly-once loads, schema-drift handling |
-| `dags/` | `bronze_ingest`, `silver_build`, `risk_model` |
+| `dags/` | `bronze_ingest`, `silver_build`, `risk_scoring`, `risk_training`, `account_agent` |
 | `pipeline/risk_model.py` | Train, gate and score; runs in its own virtualenv (`ML_PYTHON`) |
 | `pipeline/agent.py`, `pipeline/agent_tools.py` | The account agent: triage, Claude tool loop, validator, fallback, outbox |
 | `app/` | The CSM dashboard: `dashboard.py` (pages), `data.py` (tenant-scoped queries) |
 | `pipeline/snapshot.py` | Publishes the dashboard's read-only snapshot after each agent run |
-| `tests/` | Tenant-isolation tests for the dashboard's data layer |
+| `tests/` | Tenant-isolation tests for the dashboard's data layer; unit tests for the agent's validator |
 | `models_store/` | One folder per trained model: LightGBM file, calibrator, metadata with metrics |
 | `dbt/` | Staging views, silver and ops tables, seeds, tests |
 | `warehouse/warehouse.duckdb` | The warehouse: schemas `bronze`, `staging`, `silver`, `ops`, `reference`, `gold`, `ml` |
@@ -192,10 +198,10 @@ scoring run. Per run (`pipeline/agent.py`):
    contacts a customer**: drafts sit at `draft_awaiting_csm_approval`. `agent.runs` logs mode, token
    use and estimated cost.
 
-On demand:
+On demand, through Airflow so the run waits for the warehouse pool instead of racing the pipeline:
 
 ```bash
-docker compose exec airflow-scheduler bash -c 'cd /opt/airflow && $ML_PYTHON -m pipeline.agent --account <tenant>/<account_id>'
+docker compose exec airflow-scheduler airflow dags trigger account_agent --conf '{"account": "<tenant>/<account_id>"}'
 ```
 
 **Measured:**

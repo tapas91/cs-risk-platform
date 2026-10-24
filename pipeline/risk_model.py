@@ -6,7 +6,8 @@
 Reads gold.account_features / gold.account_labels (built by dbt) and writes to the `ml` schema:
     ml.model_registry     every trained model, its metrics and whether it was promoted
     ml.test_predictions   held-out predictions per model, for evaluation and audits
-    ml.risk_scores        one row per (as-of date, account): probability, band, priority, lineage
+    ml.risk_scores        one row per (as-of date, account) in the current score window: probability,
+                          band, priority, lineage. Each scoring run replaces the whole window
     ml.risk_reasons       the features that pushed each score up, with their values
 Model files live in MODEL_DIR/<version>/.
 
@@ -402,7 +403,9 @@ def score():
         version = production_model(con) if con.execute(
             "select count(*) from information_schema.tables where table_schema = 'ml' and table_name = 'model_registry'").fetchone()[0] else None
         if not version:
-            sys.exit("no production model: run `train` first")
+            # 99 = nothing to score with yet; Airflow's risk_scoring marks the task skipped, not failed
+            print("no production model: run `train` first")
+            sys.exit(99)
         df = con.execute("select * from gold.account_features where purpose = 'score' order by as_of").df()
         fx_usd = dict(con.execute("select currency, usd_per_unit from reference.fx_rates").fetchall())  # dbt seed
     booster, cal, _ = load_artifacts(version)
@@ -433,15 +436,20 @@ def score():
     s = s[cols]
     r = reasons(booster, df, version)
 
+    # Replace the whole window, not just this run's dates: score dates step back from the data date, so
+    # when it moves by a day the previous run's dates would otherwise stay behind and "last week" would
+    # compare against yesterday, scored by another model. One transaction: readers never see it half-written.
     with connect() as con:
         ensure_ml_schema(con)
-        dates = tuple(str(d)[:10] for d in s.as_of.unique())
-        for t in ("ml.risk_scores", "ml.risk_reasons"):
-            con.execute(f"delete from {t} where as_of in (select unnest(?::date[]))", [list(dates)])
+        dates = s.as_of.unique()
         con.register("s", s)
-        con.execute("insert into ml.risk_scores select * from s")
         con.register("r", r)
+        con.execute("begin")
+        con.execute("delete from ml.risk_scores")
+        con.execute("delete from ml.risk_reasons")
+        con.execute("insert into ml.risk_scores select * from s")
         con.execute("insert into ml.risk_reasons select * from r")
+        con.execute("commit")
     latest = s[s.as_of == s.as_of.max()]
     print(f"{version} scored {len(s):,} rows over {len(dates)} dates; latest {latest.as_of.max()}: "
           f"{latest.band.value_counts().to_dict()} | status {latest.status.value_counts().to_dict()}")
