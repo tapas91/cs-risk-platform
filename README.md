@@ -3,6 +3,10 @@
 Synthetic customer-success data for four B2B SaaS tenants, a DuckDB warehouse built by Airflow and
 dbt, and a fitted churn-risk model that ranks each CSM's accounts every time new data lands.
 
+**Warehouse map:** [docs/warehouse-schema.md](docs/warehouse-schema.md) has a layered overview and ER
+diagrams for identity, facts to gold, and model to agent. Every model's columns, tests and lineage are in
+the dbt docs (see [Browse the warehouse](#browse-the-warehouse)).
+
 ```
 lake/ --land.py--> landing/ --bronze_ingest--> bronze --silver_build (dbt)--> silver --risk_scoring--> gold features
 (generated)        ("bucket")  every 15 min      exact copy   on BRONZE         typed,      on SILVER     -> ml.risk_scores
@@ -37,6 +41,20 @@ makes the next pipeline task fail to open it until the session closes.
 
 To regenerate the source data: `.venv/bin/python -m datagen.generate --scale 1.0 --out lake` (see [datagen/README.md](datagen/README.md)).
 
+### Browse the warehouse
+
+Start with the diagrams in [docs/warehouse-schema.md](docs/warehouse-schema.md). For every dbt model's
+columns, tests and lineage graph, generate the dbt docs from the running stack (while the DAGs are idle,
+since it reads the warehouse), then serve them at http://localhost:8081:
+
+```bash
+docker compose exec airflow-scheduler bash -c '$DBT_BIN docs generate --project-dir /opt/airflow/dbt --profiles-dir /opt/airflow/dbt --target-path /opt/airflow/dbt/target'
+```
+
+```bash
+python3 -m http.server 8081 --directory dbt/target
+```
+
 ## Layout
 
 | Path | What it is |
@@ -54,6 +72,7 @@ To regenerate the source data: `.venv/bin/python -m datagen.generate --scale 1.0
 | `tests/` | Tenant-isolation tests for the dashboard's data layer; unit tests for the agent's validator |
 | `models_store/` | One folder per trained model: LightGBM file, calibrator, metadata with metrics |
 | `dbt/` | Staging views, silver and ops tables, seeds, tests |
+| `docs/` | `warehouse-schema.md` (layer overview and ER diagrams) and `solution-design.html` (the design as built) |
 | `warehouse/warehouse.duckdb` | The warehouse: schemas `bronze`, `staging`, `silver`, `ops`, `reference`, `gold`, `ml` |
 
 ## Design decisions
