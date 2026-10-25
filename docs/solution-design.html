@@ -287,7 +287,7 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
       <div class="group">
         <h3>Account identity</h3>
         <ul>
-          <li><span class="case">Stripe customer with no Salesforce ID.</span> <span class="handled">Matched by contact email or company domain. Each rule's confidence is measured on 1,260 labeled matches; records with no confident match (51 Stripe customers) go to quarantine. An email shared by two accounts (a consultant, a shared mailbox) matches neither, rather than the first one found.</span></li>
+          <li><span class="case">Stripe customer with no Salesforce ID.</span> <span class="handled">Matched by contact email or company domain. Each rule's confidence is measured on 1,089 labeled matches; records with no confident match (51 Stripe customers) go to quarantine. An email shared by two accounts (a consultant, a shared mailbox) matches neither, rather than the first one found.</span></li>
           <li><span class="case">Shared domains like gmail.com.</span> <span class="handled">Excluded from domain matching through a seed list, or every personal mailbox would merge into one "account".</span></li>
           <li><span class="case">Several workspaces, parent and child accounts, mergers.</span> <span class="handled">Merged Salesforce duplicates redirect to their master; each workspace maps to its account; parent and child stay separate accounts. <span class="tag">Next step</span> Roll-up to the parent.</span></li>
           <li><span class="case">The same real company is a customer of two tenants.</span> <span class="handled">Never merged: matching runs inside a tenant only. 31 such pairs stay apart, and a test enforces it.</span></li>

@@ -309,7 +309,7 @@ The plan:
 1. **Blocking:** same tenant plus a shared name key or domain.
 2. **Pair features:** the evidence above, plus name similarity (Jaro-Winkler).
 3. **Model:** [Splink](https://github.com/moj-analytical-services/splink), Fellegi–Sunter with
-   weights learned by expectation-maximisation. It runs on DuckDB. Validate it with the 1,260 labels
+   weights learned by expectation-maximisation. It runs on DuckDB. Validate it with the 1,089 labels
    already in `dbt/seeds/identity_labels.csv` (extend them with negative pairs).
 4. **Apply only to quarantined records,** after the deterministic rules, with `match_method = 'ml'`
    and the pair's calibrated probability as confidence. At most one account per record.

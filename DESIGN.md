@@ -34,7 +34,7 @@ anything a customer sees.
 - **`tenant_id` first in every key.** Source IDs collide across tenants (over 2,000 Zendesk ticket IDs), and the same company buying from two tenants is two accounts, never merged.
 - **Bronze** is append-only, with each row's `_source_file` and a file manifest, so every file loads exactly once. Schema drift adds or widens columns instead of failing.
 - **Silver history** keeps two timelines: `valid_from`/`valid_to` (when it was true in the source) and `known_at` (when we received it). Late data can't leak into past scores.
-- **Account master** (`account_xref`): stored ID → merged-ID redirect → contact email → company domain → name, all within one tenant. Ambiguous records go to quarantine rather than being guessed. Rule order is a human decision (`match_rule_priors`); each rule's confidence is **measured** on 1,260 labeled matches (Wilson lower bound) and gates the rule at 0.7.
+- **Account master** (`account_xref`): stored ID → merged-ID redirect → contact email → company domain → name, all within one tenant. Ambiguous records go to quarantine rather than being guessed. Rule order is a human decision (`match_rule_priors`); each rule's confidence is **measured** on 1,089 labeled matches (Wilson lower bound) and gates the rule at 0.7.
 - **Gold:** one row per account per as-of date, about 45 features, plus a label.
 
 ### Account state
