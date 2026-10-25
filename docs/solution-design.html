@@ -130,7 +130,7 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
 
         <!-- Scheduler band -->
         <rect x="20" y="16" width="1120" height="42" rx="4" class="bandr"/>
-        <text x="34" y="42"><tspan class="b">Airflow, dataset-chained DAGs</tspan><tspan class="sm" dx="12">bronze_ingest every 15 min → silver_build (dbt) → risk_model (features, retrain, score) → account_agent → snapshot · one writer</tspan></text>
+        <text x="34" y="42"><tspan class="b">Airflow, dataset-chained DAGs</tspan><tspan class="sm" dx="12">bronze_ingest every 15 min → silver_build (dbt) → risk_scoring (features, score) → account_agent → snapshot · risk_training monthly · one writer</tspan></text>
 
         <!-- Column headers -->
         <text x="20" y="86" class="hd">1 · SOURCES</text>
@@ -208,22 +208,22 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
         <text x="612" y="139" class="sm">7 warning signs: bar to beat</text>
         <rect x="600" y="168" width="180" height="74" rx="4" class="box"/>
         <text x="612" y="190" class="b">Train (LightGBM)</text>
-        <text x="612" y="208" class="sm">logistic check, split by time</text>
-        <text x="612" y="223" class="sm">with purge gap; isotonic,</text>
+        <text x="612" y="208" class="sm">monthly; rolling windows with</text>
+        <text x="612" y="223" class="sm">purge gaps; Platt calibration,</text>
         <text x="612" y="237" class="sm">per tenant if 50+ positives</text>
         <rect x="600" y="260" width="180" height="56" rx="4" class="box"/>
         <text x="612" y="282" class="b">Registry + promotion gate</text>
         <text x="612" y="300" class="sm">beat rules and production</text>
         <rect x="600" y="334" width="180" height="94" rx="4" class="box"/>
         <text x="612" y="356" class="b">Score</text>
-        <text x="612" y="374" class="sm">every silver build, 14 dates</text>
+        <text x="612" y="374" class="sm">new data → 14 weekly dates</text>
         <text x="612" y="389" class="sm">risk × ARR × renewal proximity</text>
         <text x="612" y="404" class="sm">TreeSHAP reasons per score</text>
         <text x="612" y="419" class="sm">hysteresis: red 0.25 → 0.18</text>
         <rect x="600" y="446" width="180" height="56" rx="4" class="acc"/>
         <text x="612" y="468" class="b">Evaluate</text>
-        <text x="612" y="486" class="sm">PR-AUC 0.29 vs 0.04 (rules)</text>
-        <text x="612" y="498" class="sm">81% of churners flagged early</text>
+        <text x="612" y="486" class="sm">PR-AUC 0.28 vs 0.03 (rules)</text>
+        <text x="612" y="498" class="sm">80% of churners flagged early</text>
         <path d="M580,232 H590 V125 H598" class="ar" marker-end="url(#ah)"/>
         <path d="M590,205 H598" class="ar" marker-end="url(#ah)"/>
         <path d="M590,232 V381 H598" class="ar" marker-end="url(#ah)"/>
@@ -315,7 +315,7 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
       <div class="group">
         <h3>Account identity</h3>
         <ul>
-          <li><span class="case">Stripe customer with no Salesforce ID.</span> <span class="handled">Matched by contact email or company domain. Each rule's confidence is measured on 1,260 labeled matches; records with no confident match (51 Stripe customers) go to quarantine.</span></li>
+          <li><span class="case">Stripe customer with no Salesforce ID.</span> <span class="handled">Matched by contact email or company domain. Each rule's confidence is measured on 1,260 labeled matches; records with no confident match (51 Stripe customers) go to quarantine. An email shared by two accounts (a consultant, a shared mailbox) matches neither, rather than the first one found.</span></li>
           <li><span class="case">Shared domains like gmail.com.</span> <span class="handled">Excluded from domain matching through a seed list, or every personal mailbox would merge into one "account".</span></li>
           <li><span class="case">Several workspaces, parent and child accounts, mergers.</span> <span class="handled">Merged Salesforce duplicates redirect to their master; each workspace maps to its account; parent and child stay separate accounts. <span class="tag">Next step</span> Roll-up to the parent.</span></li>
           <li><span class="case">The same real company is a customer of two tenants.</span> <span class="handled">Never merged: matching runs inside a tenant only. 31 such pairs stay apart, and a test enforces it.</span></li>
@@ -325,9 +325,9 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
         <h3>Modeling</h3>
         <ul>
           <li><span class="case">Accounts with almost no data.</span> <span class="handled">They get an "insufficient data" status, separate from low risk, and the dashboard says so. They're still scored, and dark accounts near renewal go to the agent.</span></li>
-          <li><span class="case">Features that leak the outcome.</span> <span class="handled">Customer notices (cancellation requests, scheduled cancellations, agent risk flags) aren't model inputs; they're shown to the CSM as known risk. Features only use data known by the as-of date, and the time split has a purge gap.</span></li>
+          <li><span class="case">Features that leak the outcome.</span> <span class="handled">Customer notices (cancellation requests, scheduled cancellations, agent risk flags) aren't model inputs; they're shown to the CSM as known risk. Accounts that already gave notice are left out of training and evaluation: they are nearly all positives and would inflate every metric. Features only use data known by the as-of date, and the rolling time windows have 90-day purge gaps.</span></li>
           <li><span class="case">Accounts younger than 90 days.</span> <span class="handled">A new-customer flag and tenure are inputs, so the model learns their pattern. <span class="tag">Next step</span> A separate onboarding cohort model.</span></li>
-          <li><span class="case">Churn or downsell is only 2.8% per 90 days.</span> <span class="handled">Judged on PR-AUC and the precision of each CSM's top 10, not accuracy, which a model can hit by predicting "renews" for everyone.</span></li>
+          <li><span class="case">Churn or downsell is only about 2% per 90 days.</span> <span class="handled">Judged on PR-AUC and the precision of each CSM's top 10, not accuracy, which a model can hit by predicting "renews" for everyone.</span></li>
           <li><span class="case">High ticket volume is ambiguous.</span> <span class="handled">Engaged customers file tickets too. Inputs use urgent and incident tickets, bad CSAT and resolution time, not raw counts; noisy-but-loyal accounts are a trap group in the evaluation.</span></li>
           <li><span class="case">A CSM saves a flagged account.</span> <span class="handled">Save plays are kept out of the model, because they react to risk already seen. <span class="tag">Next step</span> Feed interventions back as labels.</span></li>
         </ul>
@@ -346,7 +346,7 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
       <div class="group">
         <h3>Tenancy</h3>
         <ul>
-          <li><span class="case">A tenant has few accounts and little churn history.</span> <span class="handled">It uses the pooled model; per-tenant calibration applies only where a tenant has 50+ positives (Helio and Northwind today).</span></li>
+          <li><span class="case">A tenant has few accounts and little churn history.</span> <span class="handled">It uses the pooled model and the pooled calibration curve; a tenant gets its own curve only with 50+ positives in the calibration half of validation (none today).</span></li>
           <li><span class="case">One tenant's 3-year backfill.</span> <span class="handled">Each tenant's first sync carries its pre-window history; all warehouse writes share one pool, so loads queue rather than collide. <span class="tag">Next step</span> Per-tenant quotas.</span></li>
           <li><span class="case">A tenant leaves.</span> <span class="handled"><span class="tag">Next step</span> Delete its partitions and agent records, then retrain the pooled model without its rows.</span></li>
         </ul>
@@ -354,8 +354,8 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
       <div class="group">
         <h3>Traceability</h3>
         <ul>
-          <li><span class="case">The brief says "usage down 40%"; the feature says 38%.</span> <span class="handled">The validator rejects it: every number in a sentence must appear in a fact the sentence cites. One retry, then the rules write a template brief.</span></li>
-          <li><span class="case">The model was retrained since last week.</span> <span class="handled">Every score row carries its model version, and <code>ml.model_registry</code> records every model and every promotion decision.</span></li>
+          <li><span class="case">The brief says "usage down 40%"; the feature says 38%.</span> <span class="handled">The validator rejects it: every number in a sentence must appear in a fact the sentence cites. Numbers are compared as values, so "3" doesn't pass because a fact says "30", and dates and evidence IDs aren't mistaken for numbers. One retry, then the rules write a template brief.</span></li>
+          <li><span class="case">The model was retrained since last week.</span> <span class="handled">Training is monthly and separate from scoring. A promoted model rescores all 14 weekly dates at once, so week-on-week change always compares one model with itself. Every score row carries its model version, and <code>ml.model_registry</code> records every model, the time windows it used and every promotion decision.</span></li>
           <li><span class="case">A CSM disputes a score.</span> <span class="handled">The dashboard goes from score to reasons to the exact input row, and from each brief sentence to its evidence, its source rows and the landed bronze file.</span></li>
         </ul>
       </div>
@@ -371,6 +371,7 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
           <tr><td>System shape</td><td class="chose">Deterministic pipeline + one bounded agent</td><td class="over">An agent per source plus orchestrator and router</td><td>Scores must come out the same on every run and be testable against history. The agent earns its place where judgment helps: investigating, routing and writing.</td></tr>
           <tr><td>Orchestration and storage</td><td class="chose">Airflow + DuckDB + dbt</td><td class="over">Spark + Iceberg + Trino; streaming</td><td>Lightweight enough to run on a laptop, familiar to reviewers. dbt gives tests and lineage that hand-written Python operators wouldn't.</td></tr>
           <tr><td>Scoring model</td><td class="chose">LightGBM, with logistic regression and rules as baselines</td><td class="over">Sequence models; an LLM's judgment</td><td>Tabular data and few labels. Trees train in seconds, give exact per-prediction reasons and calibrate well. An LLM's score isn't reproducible or calibrated.</td></tr>
+          <tr><td>Training cadence</td><td class="chose">Monthly retrain, separate from scoring</td><td class="over">Retrain on every data change</td><td>A label needs 90 days to mature, so new training examples arrive once a month. Retraining on every sync refits the same data and changes every score for no gain. Scoring follows the data and always uses the production model, so a failed or rejected retrain never stops it.</td></tr>
           <tr><td>Role of the LLM</td><td class="chose">Investigator and brief writer in the agent, validated by code</td><td class="over">Scorer</td><td>Its value is in reading context and writing for a person. Code decides what it may see, which routes are allowed, and whether its brief stands. Ticket-text features and the CSM assistant are next steps.</td></tr>
           <tr><td>Account matching</td><td class="chose">Deterministic rules; confidence measured on labels</td><td class="over">A probabilistic matcher (Splink)</td><td>The rules are 99.96% precise. What's left is ambiguity between near-identical accounts, where Splink would need new evidence anyway: a scoped next step.</td></tr>
           <tr><td>Across tenants</td><td class="chose">Pooled base model + per-tenant calibration</td><td class="over">One model per tenant</td><td>Small tenants can't train their own model. Pooling needs contract permission; large tenants could opt into a dedicated model.</td></tr>
@@ -391,16 +392,16 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
     <ul class="details">
       <li><b>Some churners are undetectable on purpose.</b><span>The generator includes churn with no warning signs (budget cuts, acquisitions), so evaluation reflects the real ceiling instead of a perfect score.</span></li>
       <li><b>"Unknown" is different from "healthy".</b><span>Accounts with thin data say "insufficient data" on screen, and stale feeds get a banner.</span></li>
-      <li><b>Calibrated probabilities.</b><span>Isotonic calibration on validation: accounts scored around 12% churned 12.9% of the time in the test window.</span></li>
+      <li><b>Calibrated probabilities.</b><span>Platt calibration, fit on validation accounts that the booster's early stopping didn't see. Accurate at the low end, where most accounts sit (0.4% predicted, 0.4% observed); it over-predicts the 10–35% range, which a larger calibration set will tighten. Isotonic was tried and dropped: on about 100 positives it overfit into steps whose ties cost ranking quality.</span></li>
       <li><b>Priority weighs money and time.</b><span>Risk × ARR × up to 2× inside 180 days of renewal, so a yellow account renewing soon can outrank a red one renewing in 11 months.</span></li>
-      <li><b>A gate for promoting new models.</b><span>A retrained model goes live only if it beats the rules baseline and doesn't lose to production on the same test window. Every decision is logged.</span></li>
+      <li><b>A gate for promoting new models.</b><span>A retrained model goes live only if it beats the rules baseline and doesn't lose to production on the same test window. The windows roll forward with the labels, so each monthly retrain learns from one more month and is tested on data no earlier model trained on. Every decision is logged.</span></li>
       <li><b>Labels come from what the business recorded.</b><span>Churn and downsell come from Salesforce and Stripe, never from the generator's answers; they match all 639 real churns. <span class="tag">Future</span> CSM feedback as extra labels.</span></li>
       <li><b>Gmail privacy.</b><span>Metadata only: no message bodies are generated or stored. <span class="tag">Next step</span> PII redaction and per-tenant opt-in before ticket text reaches the LLM.</span></li>
       <li><b>LLM cost control.</b><span>Triage caps (12 per run, 3 per CSM), prompt caching, medium effort: about $0.05 per account, logged per run in <code>agent.runs</code>.</span></li>
       <li><b>Missing renewal dates.</b><span>The contract anniversary stands in, and "renewal date missing" is a model input rather than a silent default.</span></li>
       <li><b>Monitoring the monitor.</b><span>Feed freshness per tenant, quarantine counts and dbt tests on every build. <span class="tag">Next step</span> Feature drift between training and scoring.</span></li>
       <li><b>Secrets stay out of the image.</b><span>The API key is injected at runtime from a git-ignored <code>.env</code>; without it the agent runs on rules.</span></li>
-      <li><b>One writer, by design.</b><span>Every warehouse task shares a single-slot pool, so DuckDB's one-writer rule never surfaces as a random failure.</span></li>
+      <li><b>One writer, by design.</b><span>Every warehouse task shares a single-slot pool, so DuckDB's one-writer rule never surfaces as a random failure. On-demand agent reviews go through Airflow and queue for the same pool; ad-hoc queries go to the published snapshot, because any session on the live file, read-only included, blocks the pipeline's writes.</span></li>
     </ul>
   </section>
 </div>
