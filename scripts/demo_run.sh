@@ -28,7 +28,7 @@ rm -rf warehouse/warehouse.duckdb warehouse/warehouse.duckdb.wal .landing-stagin
 mkdir -p landing && find landing -mindepth 1 -delete
 af dags unpause bronze_ingest >/dev/null
 # A paused DAG queues every update and never runs. Pausing is an operator's decision, so stop rather than override it.
-for d in silver_build risk_model; do
+for d in silver_build risk_scoring risk_training account_agent; do
   if af dags list | grep -E "^$d " | grep -q True; then
     echo "$d is paused in Airflow. Unpause it (UI or: docker compose exec airflow-scheduler airflow dags unpause $d) and rerun."
     exit 1
@@ -45,6 +45,17 @@ wait_for_silver() {
   af dags list-runs -d silver_build | grep -E 'success|failed' | head -1 | awk -F'|' '{print "  silver_build:" $3}'
 }
 
+# Trigger a DAG and wait for that run to finish.
+run_and_wait() {
+  local before; before=$(af dags list-runs -d "$1" | grep -cE 'success|failed' || true)
+  af dags trigger "$1" >/dev/null
+  for _ in $(seq 1 120); do
+    [ "$(af dags list-runs -d "$1" | grep -cE 'success|failed' || true)" -gt "$before" ] && break
+    sleep 5
+  done
+  af dags list-runs -d "$1" | grep -E 'success|failed' | head -1 | awk -F'|' -v d="$1" '{print "  " d ":" $3}'
+}
+
 step --until 2024-12
 step --until 2025-06
 step --all
@@ -54,4 +65,9 @@ echo "Labeling a sample of account matches, then rebuilding silver with measured
 before=$(finished_silver_runs)
 af dags trigger silver_build >/dev/null
 wait_for_silver "$before"
+
+# Scoring skips until a model exists, so train once on the full history, then score with it.
+echo "Training the first model, then scoring"
+run_and_wait risk_training
+run_and_wait risk_scoring
 echo "Done. Check: .venv/bin/python scripts/verify_warehouse.py"

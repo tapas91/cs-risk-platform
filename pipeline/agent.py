@@ -2,12 +2,15 @@
 
     $ML_PYTHON -m pipeline.agent                 # runs after every scoring run (Airflow: account_agent)
     AGENT_MAX_CASES=3 $ML_PYTHON -m pipeline.agent
-    $ML_PYTHON -m pipeline.agent --account northwind/001NW...   # review one account on demand
+    $ML_PYTHON -m pipeline.agent --account northwind/001NW...   # one account (or AGENT_ACCOUNT=...)
+On demand, prefer `airflow dags trigger account_agent --conf '{"account": "northwind/001NW..."}'`: run
+directly, the agent opens the warehouse outside Airflow's duckdb pool and a pipeline task can fail on the lock.
 
 What it does, per run:
   1. Triage (SQL, no model): from the latest scores, pick accounts that newly gave notice, newly entered
      red, jumped 10+ points in a week, sit at the top of a CSM's book while flagged, or are dark close
-     to renewal. Skip any account already handled for this as-of date. Cap per CSM and per run.
+     to renewal. Skip any account already handled for this as-of date, or reviewed in the 7 days before
+     it unless it newly gave notice or newly entered red. Cap per CSM and per run.
   2. Investigate: Claude (ANTHROPIC_MODEL, default claude-opus-5-5) calls read-only tools bound to the
      case (pipeline/agent_tools.py) and returns a JSON decision: a route, a brief where every sentence
      cites evidence IDs, and an optional outreach draft.
@@ -16,16 +19,19 @@ What it does, per run:
   4. Act: write the case, its evidence, tool calls and an outbox action. Idempotent on (tenant, account,
      as_of). It never changes a score, never contacts a customer: drafts wait for CSM approval.
 Without an API key, on a refusal or on an API error, the same steps run with rule-based routing and a
-template brief built from the same evidence.
+template brief built from the same evidence. A case that can't be handled even then (no score for the
+date, a tool that errors) is recorded in agent.failures and retried by the next run, up to 3 times; the
+rest of the run carries on. Each case is saved as it completes, and agent.runs records the run as ok,
+partial or failed. A failed run exits 1, so the Airflow task fails visibly.
 
-Tables (schema `agent`): runs, cases, evidence, tool_calls, actions."""
+Tables (schema `agent`): runs, cases, evidence, tool_calls, actions, failures."""
 import json
 import os
 import re
 import sys
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import duckdb
@@ -36,13 +42,20 @@ WAREHOUSE = os.environ.get("WAREHOUSE_PATH", "warehouse/warehouse.duckdb")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
 MAX_CASES = int(os.environ.get("AGENT_MAX_CASES", "12"))
 MAX_PER_CSM = int(os.environ.get("AGENT_MAX_PER_CSM", "3"))
+# Score dates move with every sync, so without this an account flagged on Monday is reviewed again on
+# Tuesday. Counted in score dates, not wall-clock time, so a replay behaves the same.
+COOLDOWN_DAYS = int(os.environ.get("AGENT_COOLDOWN_DAYS", "7"))
+ALWAYS_REVIEW = ("new_notice", "entered_red")  # a worse state than at the last review: never wait
 MAX_TURNS = 12
 WORKERS = 4
 PRICE_PER_MTOK = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-5-5": (0.10, 0.50)}
 
 ROUTES = ["csm_task", "billing_queue", "suppress", "data_quality", "no_action"]
 INTERNAL_TERMS = re.compile(r"\b(churn\w*|risk\w*|score\w*|model|probabilit\w*|red|yellow|band|at-risk|health score|internal)\b", re.I)
-NUMBER = re.compile(r"\$?\d[\d,]*(?:\.\d+)?%?")
+# Numbers a brief may state. A date is one token; evidence IDs (E17) and digits inside words (Q3, v2) aren't numbers.
+DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+EVIDENCE_ID = re.compile(r"\bE\d+\b")
+NUMBER = re.compile(r"(?<![\w.])\d+(?:,\d{3})*(?:\.\d+)?(?![\w])")
 
 SYSTEM = """You review one customer account at a time for a customer success (CS) team and decide what should happen next.
 
@@ -87,6 +100,13 @@ class AgentError(Exception):
     pass
 
 
+class CaseUnavailable(Exception):
+    """The case can't be assembled (no score for the date, say): nothing to cite, so no brief is written."""
+
+
+MAX_ATTEMPTS = 3  # failed attempts per account and score date before triage stops retrying it
+
+
 # ------------------------------------------------------------------ storage
 
 def ensure_schema(con):
@@ -107,6 +127,11 @@ def ensure_schema(con):
     con.execute("""create table if not exists agent.actions (
         action_id varchar primary key, case_id varchar, tenant_id varchar, account_id varchar, action_type varchar,
         assignee varchar, payload json, status varchar, created_at timestamptz)""")
+    # A case that couldn't be handled: no case, no action, so the next run retries it (up to MAX_ATTEMPTS).
+    con.execute("""create table if not exists agent.failures (
+        run_id varchar, tenant_id varchar, account_id varchar, as_of date, trigger varchar, error varchar,
+        failed_at timestamptz)""")
+    con.execute("alter table agent.runs add column if not exists failed_cases integer")
 
 
 # ------------------------------------------------------------------ triage
@@ -135,11 +160,22 @@ def triage(con):
     if rows.empty:
         return rows
     if con.execute("select count(*) from information_schema.tables where table_schema='agent' and table_name='cases'").fetchone()[0]:
-        done = con.execute("select tenant_id, account_id, as_of from agent.cases").df()
-        if not done.empty:
-            done["as_of"] = done.as_of.astype(str)
-            rows["_k"] = rows.tenant_id + "|" + rows.account_id + "|" + rows.as_of.astype(str)
-            rows = rows[~rows._k.isin(done.tenant_id + "|" + done.account_id + "|" + done.as_of)].drop(columns="_k")
+        # Skip accounts reviewed within COOLDOWN_DAYS of this score date (which includes this date itself),
+        # unless the trigger says things got worse since.
+        recent = con.execute("""select distinct tenant_id, account_id from agent.cases
+                                where as_of > ?::date - ?::integer and as_of <= ?::date""",
+                             [rows.as_of.max(), COOLDOWN_DAYS, rows.as_of.max()]).df()
+        if not recent.empty:
+            key = rows.tenant_id + "|" + rows.account_id
+            cooling = key.isin(recent.tenant_id + "|" + recent.account_id) & ~rows.trigger.isin(ALWAYS_REVIEW)
+            same_date = key.isin(con.execute("select tenant_id || '|' || account_id from agent.cases where as_of = ?",
+                                             [rows.as_of.max()]).df().iloc[:, 0])
+            rows = rows[~(cooling | same_date)]
+    if con.execute("select count(*) from information_schema.tables where table_schema='agent' and table_name='failures'").fetchone()[0]:
+        # A case that keeps failing for this score date is left for a person, not retried forever.
+        given_up = con.execute("""select tenant_id || '|' || account_id from agent.failures where as_of = ?
+                                  group by 1 having count(*) >= ?""", [rows.as_of.max(), MAX_ATTEMPTS]).df().iloc[:, 0]
+        rows = rows[~(rows.tenant_id + "|" + rows.account_id).isin(given_up)]
     rows["_t"] = rows.trigger.map({t: i for i, t in enumerate(TRIGGER_ORDER)})
     rows = rows.sort_values(["_t", "priority"], ascending=[True, False])
     rows["_n"] = rows.groupby(["tenant_id", rows.owner_id.fillna("unassigned")]).cumcount()
@@ -148,6 +184,8 @@ def triage(con):
 
 def on_demand(con, ref: str):
     """One account, from its latest score, regardless of triage. Replaces any case already written for that date."""
+    if "/" not in ref:
+        sys.exit(f"account must be <tenant>/<account_id>, got {ref!r}")
     tenant_id, account_id = ref.split("/", 1)
     rows = con.execute("""select *, null::double as prev_prob, 'on_demand' as trigger from ml.risk_scores
                           where tenant_id = ? and account_id = ? order by as_of desc limit 1""", [tenant_id, account_id]).df()
@@ -161,8 +199,15 @@ def on_demand(con, ref: str):
 
 # ------------------------------------------------------------------ validation
 
-def _norm(s: str) -> str:
-    return s.replace(",", "").replace("$", "")
+def numbers(text: str) -> set:
+    """The numbers stated in a text, as comparable values: "$1,200" and "1200" are the same, "3" isn't "30"."""
+    dates = set(DATE.findall(text))
+    rest = EVIDENCE_ID.sub(" ", DATE.sub(" ", text))
+    values = set()
+    for n in NUMBER.findall(rest):
+        v = n.replace(",", "")
+        values.add(v.rstrip("0").rstrip(".") if "." in v else v.lstrip("0") or "0")
+    return dates | values
 
 
 def validate(decision: dict, case: Case, status: str) -> list:
@@ -179,11 +224,9 @@ def validate(decision: dict, case: Case, status: str) -> list:
             errors.append(f"brief sentence {i} cites no evidence")
         if missing:
             errors.append(f"brief sentence {i} cites unknown evidence {missing}")
-        pool = _norm(" ".join(c["fact"] for c in cited))
-        for n in NUMBER.findall(s["text"]):
-            core = _norm(n).rstrip("%")
-            if core and core not in pool:
-                errors.append(f"brief sentence {i}: the number {n} does not appear in its cited facts")
+        stated = numbers(" ".join(c["fact"] for c in cited))
+        for n in sorted(numbers(s["text"]) - stated):
+            errors.append(f"brief sentence {i}: the number {n} does not appear in its cited facts")
     texts = " ".join(e["fact"] for e in case.evidence).lower()
     route = decision["route"]
     if route == "billing_queue" and not re.search(r"[1-9]\d* failed card payments|past_due", texts):
@@ -262,11 +305,16 @@ def decide_llm(client, con, row, case: Case, tenant_name: str, csm_name: str, us
 
 
 def decide_fallback(con, row, case: Case):
-    """Rule-based route and a template brief from the same evidence the model would have seen."""
-    risk = get_risk_summary(con, case)["facts"]
-    billing = get_billing(con, case)["facts"]
-    work = get_open_work(con, case)["facts"]
-    people = get_relationship(con, case)["facts"]
+    """Rule-based route and a template brief from the same evidence the model would have seen.
+    A tool that reports an error counts as no facts from that tool; without the score itself there is
+    nothing to cite, so the case is unavailable rather than guessed."""
+    summary = get_risk_summary(con, case)
+    risk = summary.get("facts") or []
+    if not risk:
+        raise CaseUnavailable(summary.get("error", "no score facts for this account on this date"))
+    billing = get_billing(con, case).get("facts") or []
+    work = get_open_work(con, case).get("facts") or []
+    people = get_relationship(con, case).get("facts") or []
     by_text = lambda facts, pat: [f for f in facts if re.search(pat, f["fact"], re.I)]
     failed = by_text(billing, r"^[1-9]\d* failed card payments")
     busy = by_text(work, r"^[1-9]\d* open escalation|stage Negotiation|save-plan activities")
@@ -300,11 +348,8 @@ def decide_fallback(con, row, case: Case):
 
 # ------------------------------------------------------------------ run
 
-def handle(con, client, row, tenant_name, csm_name, run_id):
-    as_of = row.as_of.date() if hasattr(row.as_of, "date") else row.as_of
-    row = row._replace(as_of=as_of)
-    case = Case(row.tenant_id, row.account_id, as_of, row.feature_cutoff)
-    usage = dict(input=0, output=0, cache_read=0)
+def handle(con, client, row, tenant_name, csm_name, usage: dict):
+    case = Case(row.tenant_id, row.account_id, row.as_of, row.feature_cutoff)
     log, turns, errors = [], 0, []
     if client is not None:
         try:
@@ -325,6 +370,18 @@ def handle(con, client, row, tenant_name, csm_name, run_id):
                 usage=usage, log=log, turns=turns)
 
 
+def review(con, client, row, tenant_name, csm_name) -> dict:
+    """One case, and it never raises: either a decision to persist, or a failure to record. One account the
+    fallback can't handle (no score for the date, a tool that errors) costs that case, not the run."""
+    as_of = row.as_of.date() if hasattr(row.as_of, "date") else row.as_of
+    row = row._replace(as_of=as_of)
+    usage = dict(input=0, output=0, cache_read=0)
+    try:
+        return handle(con, client, row, tenant_name, csm_name, usage)
+    except Exception as e:
+        return dict(row=row, failed=f"{type(e).__name__}: {e}", usage=usage)
+
+
 def persist(con, run_id, results):
     now = datetime.now(timezone.utc)
     for r in results:
@@ -342,7 +399,8 @@ def persist(con, run_id, results):
                         [case_id, e["evidence_id"], e["fact"], e["value"], e["source_table"], e["source_key"]])
         for i, t in enumerate(r["log"], start=1):
             con.execute("insert into agent.tool_calls values (?,?,?,?,?,?)", [case_id, i, t["tool"], t["input"], t["result_chars"], t["ms"]])
-        if d["route"] != "no_action":
+        # A brief that failed validation even from the rules is kept for audit, but nobody is asked to act on it.
+        if d["route"] != "no_action" and r["vstatus"] == "passed":
             assignee = {"csm_task": row.owner_id or "cs-team-lead", "billing_queue": "billing", "suppress": row.owner_id or "cs-team-lead",
                         "data_quality": "data-platform"}[d["route"]]
             con.execute("insert into agent.actions values (?,?,?,?,?,?,?,?,?) on conflict do nothing", [
@@ -351,9 +409,77 @@ def persist(con, run_id, results):
                 json.dumps(dict(headline=d["headline"], priority=d["priority"], action=d["recommended_action"])), "open", now])
 
 
+def record_failure(con, run_id, r):
+    row = r["row"]
+    con.execute("insert into agent.failures values (?,?,?,?,?,?,?)",
+                [run_id, row.tenant_id, row.account_id, row.as_of, row.trigger, r["failed"][:2000], datetime.now(timezone.utc)])
+
+
+def cost_of(rows) -> tuple:
+    tin = sum(r["usage"]["input"] for r in rows)
+    tout = sum(r["usage"]["output"] for r in rows)
+    tcache = sum(r["usage"]["cache_read"] for r in rows)
+    pin, pout = PRICE_PER_MTOK.get(MODEL, (4.0, 20.0))
+    return tin, tout, tcache, round((tin * pin + tcache * pin * 0.1 + tout * pout) / 1e6, 4)
+
+
+def run_reviews(con, client, queue, tenants: dict, csms: dict, run_id: str) -> dict:
+    """Review the queue and record the run honestly. The run row is written first as "running" and always
+    finished: "ok", "partial" (some cases failed) or "failed" (every case failed, or the run itself broke).
+    Each case is saved in its own transaction as soon as it completes, so a crash loses at most the cases
+    still in flight, not the ones already decided and paid for."""
+    started = datetime.now(timezone.utc)
+    con.execute("""insert into agent.runs (run_id, started_at, as_of, mode, model, triaged, status)
+                   values (?, ?, ?, ?, ?, ?, 'running')""",
+                [run_id, started, queue.as_of.max() if not queue.empty else None,
+                 "llm" if client else "fallback", MODEL if client else None, len(queue)])
+    results, failures, status, error = [], [], "failed", None
+
+    def work(row):
+        csm = csms.get((row.tenant_id, row.owner_id), "the account team")
+        return review(con.cursor(), client, row, tenants.get(row.tenant_id, row.tenant_id), csm)
+
+    try:
+        with ThreadPoolExecutor(max_workers=WORKERS if client else 1) as pool:
+            futures = [pool.submit(work, row) for row in queue.itertuples(index=False)]
+            try:
+                for f in as_completed(futures):
+                    r = f.result()
+                    con.execute("begin")
+                    if "failed" in r:
+                        record_failure(con, run_id, r)
+                        failures.append(r)
+                    else:
+                        persist(con, run_id, [r])
+                        results.append(r)
+                    con.execute("commit")
+            except BaseException:
+                for f in futures:
+                    f.cancel()
+                raise
+        status = "ok" if not failures else "partial" if results else "failed"
+        if failures:
+            error = "; ".join(f"{r['row'].account_id}: {r['failed']}" for r in failures)[:2000]
+    except BaseException as e:
+        error = f"{type(e).__name__}: {e}"[:2000]
+        try:
+            con.execute("rollback")
+        except duckdb.Error:
+            pass  # no transaction was open
+        raise
+    finally:
+        tin, tout, tcache, cost = cost_of(results + failures)
+        llm = sum(r["decided_by"] == "llm" for r in results)
+        con.execute("""update agent.runs set finished_at = ?, handled = ?, llm_cases = ?, fallback_cases = ?, failed_cases = ?,
+                       input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, est_cost_usd = ?, status = ?, error = ?
+                       where run_id = ?""",
+                    [datetime.now(timezone.utc), len(results), llm, len(results) - llm, len(failures),
+                     tin, tout, tcache, cost, status, error, run_id])
+    return dict(status=status, results=results, failures=failures, llm=llm, tokens=(tin, tout, tcache), cost=cost)
+
+
 def main():
     run_id = uuid.uuid4().hex[:12]
-    started = datetime.now(timezone.utc)
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     client = None
     if key:
@@ -361,37 +487,25 @@ def main():
         client = anthropic.Anthropic(max_retries=3)
     con = duckdb.connect(WAREHOUSE, config={"TimeZone": "UTC"})
     ensure_schema(con)
-    queue = on_demand(con, sys.argv[sys.argv.index("--account") + 1]) if "--account" in sys.argv else triage(con)
+    account = sys.argv[sys.argv.index("--account") + 1] if "--account" in sys.argv else os.environ.get("AGENT_ACCOUNT", "")
+    queue = on_demand(con, account) if account else triage(con)
     tenants = dict(con.execute("select tenant_id, tenant_name from reference.tenants").fetchall())
     csms = {(t, u): n for t, u, n in con.execute("select tenant_id, user_id, user_name from silver.dim_user").fetchall()}
     print(f"run {run_id}: {len(queue)} accounts to review, mode {'llm ' + MODEL if client else 'fallback (no API key)'}")
-    if queue.empty:
-        results = []
-    else:
-        def work(row):
-            csm = csms.get((row.tenant_id, row.owner_id), "the account team")
-            return handle(con.cursor(), client, row, tenants.get(row.tenant_id, row.tenant_id), csm, run_id)
-        with ThreadPoolExecutor(max_workers=WORKERS if client else 1) as pool:
-            results = list(pool.map(work, [r for r in queue.itertuples(index=False)]))
-    con.execute("begin")
-    persist(con, run_id, results)
-    tin = sum(r["usage"]["input"] for r in results)
-    tout = sum(r["usage"]["output"] for r in results)
-    tcache = sum(r["usage"]["cache_read"] for r in results)
-    pin, pout = PRICE_PER_MTOK.get(MODEL, (4.0, 20.0))
-    cost = round((tin * pin + tcache * pin * 0.1 + tout * pout) / 1e6, 4)
-    llm = sum(r["decided_by"] == "llm" for r in results)
-    con.execute("insert into agent.runs values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
-        run_id, started, datetime.now(timezone.utc), queue.as_of.max() if not queue.empty else None,
-        "llm" if client else "fallback", MODEL if client else None, len(queue), len(results), llm, len(results) - llm,
-        tin, tout, tcache, cost, "ok", None])
-    con.execute("commit")
+    run = run_reviews(con, client, queue, tenants, csms, run_id)
     con.close()
-    for r in results:
+    for r in run["results"]:
         print(f"  {r['row'].account_name:<32} {r['row'].trigger:<18} -> {r['decision']['route']:<13} "
               f"[{r['decided_by']}, validation {r['vstatus']}, {r['turns']} turns, {len(r['log'])} tools]")
-    print(f"run {run_id} done: {llm} decided by the model, {len(results) - llm} by fallback; "
-          f"tokens in {tin:,} (+{tcache:,} cached), out {tout:,}; est. ${cost}")
+    for r in run["failures"]:
+        print(f"  {r['row'].account_name:<32} {r['row'].trigger:<18} -> FAILED: {r['failed']}")
+    tin, tout, tcache = run["tokens"]
+    n = len(run["results"])
+    print(f"run {run_id} {run['status']}: {run['llm']} decided by the model, {n - run['llm']} by fallback, "
+          f"{len(run['failures'])} failed; tokens in {tin:,} (+{tcache:,} cached), out {tout:,}; est. ${run['cost']}")
+    # A failed run fails the Airflow task so someone sees it; a partial one is a warning, and its failed
+    # cases are retried by the next run.
+    return 1 if run["status"] == "failed" else 0
 
 
 if __name__ == "__main__":

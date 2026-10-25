@@ -18,8 +18,9 @@ timeline as (
            bool_or(is_deleted_in_source) as is_deleted
     from versions group by 1, 2
 ),
-requester as (
-    select distinct tenant_id, email, account_id from {{ ref('dim_contact_history') }}
+requester as (  -- same rule as account_match_candidates: an email shared by two accounts matches neither
+    select tenant_id, email, min(account_id) as account_id from {{ ref('dim_contact_history') }}
+    group by 1, 2 having count(distinct account_id) = 1
 )
 
 select
@@ -52,4 +53,3 @@ join timeline t using (tenant_id, ticket_id)
 left join {{ ref('account_xref') }} xo
     on xo.tenant_id = l.tenant_id and xo.source_system = 'zendesk.organization' and xo.source_id = l.organization_id
 left join requester r on r.tenant_id = l.tenant_id and r.email = l.requester_email
-qualify row_number() over (partition by l.tenant_id, l.ticket_id order by r.account_id) = 1

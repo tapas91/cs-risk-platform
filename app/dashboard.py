@@ -24,8 +24,10 @@ ROUTE_LABEL = {"csm_task": "CSM task", "billing_queue": "Billing", "suppress": "
 st.set_page_config(page_title="Account Risk", layout="wide")
 
 
-@st.cache_resource
+@st.cache_resource(max_entries=1)
 def _con(mtime: float):
+    # One entry: when a new snapshot is published the old connection drops out of the cache, and DuckDB
+    # closes it once no rerun still holds it, releasing the replaced file instead of keeping it open.
     return D.connect()
 
 
@@ -43,7 +45,17 @@ def viewer() -> D.Viewer:
 
 
 def pct(x) -> str:
-    return "" if pd.isna(x) else f"{x:.0%}"
+    """Risk as a CSM reads it: below half a percent the model can't tell 0.1% from 0.4%, so say "<1%"."""
+    return "" if pd.isna(x) else "<1%" if x < 0.005 else f"{x:.0%}"
+
+
+NO_DATA = "no data"
+
+
+def shown_band(band: str, status: str) -> str:
+    """Unknown must never look healthy: an account with too little recent data that the model would call
+    green shows "no data". One it flags red or yellow keeps that band; going dark can be the risk itself."""
+    return NO_DATA if status == "insufficient_data" and band == "green" else band
 
 
 def money(x) -> str:
@@ -90,6 +102,9 @@ def sign_in():
     pick = st.selectbox("Person", list(people.itertuples()), format_func=label)
     if st.button("Sign in", type="primary"):
         st.session_state["viewer"] = D.Viewer(pick.tenant_id, pick.user_id, pick.user_name, pick.role)
+        # The browser may still be on another page's URL (signed out from an account page, or the
+        # session dropped there); land on My accounts, not on whatever account that page defaults to.
+        st.session_state["land_on_accounts"] = True
         st.rerun()
 
 
@@ -101,9 +116,9 @@ def header():
             st.session_state.clear()
             st.rerun()
         st.divider()
+        when = lambda t: "not yet" if pd.isna(t) else f"{pd.Timestamp(t):%Y-%m-%d %H:%M} UTC"
         st.caption(f"Scores as of **{info['scores_as_of']:%Y-%m-%d}**  \nModel `{info['model_version']}`  \n"
-                   f"Agent last ran {pd.Timestamp(info['agent_run_at']):%Y-%m-%d %H:%M} UTC  \n"
-                   f"Snapshot {pd.Timestamp(info['published_at']):%Y-%m-%d %H:%M} UTC")
+                   f"Agent last ran {when(info['agent_run_at'])}  \nSnapshot {when(info['published_at'])}")
     stale = D.stale_feeds(con(), v)
     stale = stale[stale.freshness_status == "stale"]
     if not stale.empty:
@@ -122,23 +137,28 @@ def page_accounts():
         choice = st.selectbox("CSM", ["Everyone"] + opts.user_name.tolist())
         owner = None if choice == "Everyone" else opts.loc[opts.user_name == choice, "user_id"].iloc[0]
     book = D.worklist(con(), v, owner)
+    book["band"] = [shown_band(b, s) for b, s in zip(book.band, book.status)]
+    no_data = book.band == NO_DATA
 
-    c = st.columns(5)
+    c = st.columns(6)
     c[0].metric("Accounts", len(book))
     c[1].metric("Red", int((book.band == "red").sum()))
     c[2].metric("Yellow", int((book.band == "yellow").sum()))
     c[3].metric("Customer notices", int((book.status == "customer_notice").sum()))
-    c[4].metric("Revenue at risk", money((book.risk_prob * book.arr_usd).sum()))
+    c[4].metric("Too little data", int(no_data.sum()), help="Not enough recent usage, support or email data to judge. "
+                "Not the same as healthy: check why the data is missing.")
+    c[5].metric("Revenue at risk", money((book.risk_prob * book.arr_usd)[~no_data].sum()))
 
     f1, f2 = st.columns([2, 1])
-    bands = f1.multiselect("Band", ["red", "yellow", "green"], default=["red", "yellow"])
+    bands = f1.multiselect("Band", ["red", "yellow", NO_DATA, "green"], default=["red", "yellow"])
     reviewed = f2.toggle("Only accounts the agent reviewed", value=False)
     view = book[book.band.isin(bands)] if bands else book
     if reviewed:
         view = view[view.route.notna()]
 
+    unknown = view.band == NO_DATA
     table = view.assign(
-        risk=(view.risk_prob * 100).round(), change=view.change.map(change),
+        risk=(view.risk_prob * 100).round().mask(unknown), change=view.change.map(change).mask(unknown, ""),
         agent=view.route.map(ROUTE_LABEL).fillna(""), status=view.status.str.replace("_", " "))
     st.caption("Select a row to open the account.")
     event = st.dataframe(
@@ -188,11 +208,16 @@ def page_detail():
         st.error("This account isn't in your book.")
         return
 
+    band = shown_band(acc["band"], acc["status"])
     st.header(acc["account_name"])
-    st.caption(f"{acc['band'].capitalize()} band · #{int(acc['rank_in_book'])} in the book · "
+    st.caption(f"{'No data' if band == NO_DATA else band.capitalize() + ' band'} · #{int(acc['rank_in_book'])} in the book · "
                f"{acc['status'].replace('_', ' ')}" + (f" · {acc['band_note']}" if acc["band_note"] else ""))
     c = st.columns(3)
-    c[0].metric("Risk, next 90 days", pct(acc["risk_prob"]))
+    if band == NO_DATA:
+        c[0].metric("Risk, next 90 days", "—", help="Too little recent usage, support or email data to judge this "
+                    "account. That is not the same as healthy.")
+    else:
+        c[0].metric("Risk, next 90 days", pct(acc["risk_prob"]))
     c[1].metric("ARR", money(acc["arr_usd"]))
     c[2].metric("Renews in", f"{acc['days_to_renewal']} days")
     if acc["notices"]:
@@ -207,7 +232,15 @@ def page_detail():
         left.altair_chart(risk_chart(D.risk_history(con(), v, account_id)), width="stretch")
         right.subheader("What pushed it up")
         r = D.reasons(con(), v, account_id)
-        if r.empty:
+        if band == NO_DATA:
+            right.write("Too little recent data to explain a score. Check why usage, support and email data are "
+                        "missing for this account.")
+        elif acc["risk_prob"] < 0.01:
+            # Reasons are pushes above an average account, so a near-zero score still has some; showing them
+            # under "what pushed it up" would contradict the number above.
+            right.write("Risk is under 1%: nothing in this account's recent data points to churn or a downsell in "
+                        "the next 90 days.")
+        elif r.empty:
             right.write("No features pushed this score above the baseline.")
         else:
             right.altair_chart(alt.Chart(r).mark_bar().encode(
@@ -235,15 +268,18 @@ def page_detail():
             st.divider()
             st.subheader("Trace a fact")
             cited = sorted({e for s in brief for e in s["evidence"] if e in facts}, key=lambda e: int(e[1:]))
-            pick = st.selectbox("Evidence", cited, format_func=lambda e: f"{e}: {facts.get(e, '?')}")
-            row = ev[ev.evidence_id == pick].iloc[0]
-            st.caption(f"Source `{row.source_table}` · key `{row.source_key}`")
-            title, rows, files = D.source_rows(con(), v, account_id, row.source_table, row.source_key)
-            st.markdown(f"**{title}**")
-            st.dataframe(rows, hide_index=True, width="stretch")
-            if not files.empty:
-                st.markdown("**Loaded from these landed files (bronze)**")
-                st.dataframe(files, hide_index=True, width="stretch")
+            if not cited:
+                st.info("This brief cites no evidence recorded for the case, so there is nothing to trace.")
+            else:
+                pick = st.selectbox("Evidence", cited, format_func=lambda e: f"{e}: {facts.get(e, '?')}")
+                row = ev[ev.evidence_id == pick].iloc[0]
+                st.caption(f"Source `{row.source_table}` · key `{row.source_key}`")
+                title, rows, files = D.source_rows(con(), v, account_id, row.source_table, row.source_key)
+                st.markdown(f"**{title}**")
+                st.dataframe(rows, hide_index=True, width="stretch")
+                if not files.empty:
+                    st.markdown("**Loaded from these landed files (bronze)**")
+                    st.dataframe(files, hide_index=True, width="stretch")
 
             if case["outreach_body"]:
                 st.divider()
@@ -288,6 +324,11 @@ def page_team():
         "revenue_at_risk_usd": st.column_config.NumberColumn("Revenue at risk", format="$%d")})
     st.subheader("Agent reviews")
     st.dataframe(D.agent_activity(con(), v), hide_index=True, width="stretch")
+    failed = D.agent_failures(con(), v)
+    if not failed.empty:
+        st.subheader("Reviews that failed")
+        st.caption("The agent couldn't review these accounts. Each is retried on the next run, up to 3 times per score date.")
+        st.dataframe(failed, hide_index=True, width="stretch")
     left, right = st.columns(2)
     left.subheader("Data freshness")
     left.dataframe(D.data_health(con(), v), hide_index=True, width="stretch")
@@ -310,4 +351,7 @@ elif "viewer" not in st.session_state:
 else:
     header()
     pages = [PAGES["accounts"], PAGES["detail"]] + ([PAGES["team"]] if viewer().is_manager else [])
-    st.navigation(pages).run()
+    page = st.navigation(pages)
+    if st.session_state.pop("land_on_accounts", False) and page.title != PAGES["accounts"].title:
+        st.switch_page(PAGES["accounts"])
+    page.run()

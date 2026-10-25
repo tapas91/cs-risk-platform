@@ -34,31 +34,35 @@ anything a customer sees.
 - **`tenant_id` first in every key.** Source IDs collide across tenants (over 2,000 Zendesk ticket IDs), and the same company buying from two tenants is two accounts, never merged.
 - **Bronze** is append-only, with each row's `_source_file` and a file manifest, so every file loads exactly once. Schema drift adds or widens columns instead of failing.
 - **Silver history** keeps two timelines: `valid_from`/`valid_to` (when it was true in the source) and `known_at` (when we received it). Late data can't leak into past scores.
-- **Account master** (`account_xref`): stored ID → merged-ID redirect → contact email → company domain → name, all within one tenant. Ambiguous records go to quarantine rather than being guessed. Rule order is a human decision (`match_rule_priors`); each rule's confidence is **measured** on 1,260 labeled matches (Wilson lower bound) and gates the rule at 0.7.
+- **Account master** (`account_xref`): stored ID → merged-ID redirect → contact email → company domain → name, all within one tenant. Ambiguous records go to quarantine rather than being guessed. Rule order is a human decision (`match_rule_priors`); each rule's confidence is **measured** on 1,089 labeled matches (Wilson lower bound) and gates the rule at 0.7.
 - **Gold:** one row per account per as-of date, about 45 features, plus a label.
 
 ### Account state
 An account's state is four layers, each answering a different question:
 1. **What the systems said, and when we knew it:** silver history.
 2. **The account as the model saw it on a date:** a `gold.account_features` row, built only from data received by that date.
-3. **Risk state** (`ml.risk_scores`):
+3. **Risk state** (`ml.risk_scores`, the current 14 weekly dates):
    - a calibrated probability,
-   - a band with hysteresis (red after two runs ≥ 0.25, held until < 0.18; yellow 0.10 / 0.07),
+   - a band with hysteresis (red after two weekly scores ≥ 0.25, held until < 0.18; yellow 0.10 / 0.07), walked over 26 weeks so it doesn't depend on where the shown window starts,
    - a status: `scored`, `insufficient_data` or `customer_notice`.
+   - **What was shown** is kept apart from the current state: `ml.score_log` appends the latest date's row whenever an account's shown score changes. The current table can be rewritten by a new model; the log can't.
 4. **What we're doing about it:** the agent's case (route, brief, evidence) for that score date.
 
 ### What the model predicts
 - **Target:** churn or downsize (20%+ seats lost) **within 90 days**, for live customers. That's long enough to act and short enough to be honest. Downsell counts, because losing half the seats is a loss too.
 - **Labels** come from what the business recorded (Stripe cancellation, lost renewal, Former Customer status, seat drop), never from the generator's answers. They match all 639 real churns.
 - **Not inputs:** customer notices (known risk, shown to the CSM, not predicted) and CSM save plays (they react to risk already seen).
-- **Model:** LightGBM, over logistic regression and over an LLM's judgment. Tabular data, rare positives (2.8%); trees learn interactions and give an exact per-score explanation (TreeSHAP).
-- **Calibration:** isotonic on validation, per tenant where a tenant has 50+ positives.
+- **Model:** LightGBM, over logistic regression and over an LLM's judgment. Tabular data, rare positives (2–3%); trees learn interactions and give an exact per-score explanation (TreeSHAP).
+- **Evaluation population:** accounts that already gave notice are left out of training and test. They're nearly all positives and would inflate every metric; the model is judged on early warning only.
+- **Windows:** rolling, counted back from the newest month with a complete label (test 3 months, validation 3, training the rest, 90-day gaps between), so each monthly retrain learns from one more month.
+- **Calibration:** Platt (a logistic curve over the model's log-odds) on half the validation accounts, the half early stopping didn't see; per tenant where a tenant has 50+ positives. Isotonic was tried and dropped: on ~100 positives it overfit into steps whose ties cost ranking quality (PR-AUC 0.24 vs 0.28 for the same model).
 - **Ranking:** probability × ARR × up to 2× within 180 days of renewal. Notices first, then red, then yellow.
 
 ### How unattended work is triggered
 1. `bronze_ingest` runs every 15 minutes, and stops at its first task if nothing new landed.
-2. Each later DAG runs because the previous one **changed data** (Airflow datasets), not on a clock: `silver_build` → `risk_model` (features, retrain, gate, score) → `account_agent` (review, publish dashboard snapshot).
-3. **Gates:**
+2. Each later DAG runs because the previous one **changed data** (Airflow datasets), not on a clock: `silver_build` → `risk_scoring` (features, score with the production model) → `account_agent` (review, publish dashboard snapshot).
+3. **Training is separate and monthly** (`risk_training`). Labels take 90 days to mature, so retraining on every sync adds nothing and would change every score. A failed retrain never stops scoring.
+4. **Gates:**
    - dbt tests fail a bad silver build;
    - a retrained model reaches production only if it beats the rules baseline and doesn't lose more than 0.005 PR-AUC to production;
    - the agent reviews at most 12 accounts per run, 3 per CSM.
@@ -70,7 +74,10 @@ An account's state is four layers, each answering a different question:
   - routes need supporting evidence (billing needs a failed payment, suppression needs work in progress);
   - drafts contain no internal terms.
 - **One retry,** then rule-based fallback. That fallback also covers no API key and refusals.
+- **A failing case costs that case, not the run:** it's recorded and retried next run (up to 3 times), each case is saved as it completes, and every run is recorded as ok, partial or failed.
 - **Idempotent outbox** (`agent.actions`). It never changes a score and never contacts a customer.
+- **Evidence cites the score log,** not the current table, so a brief's numbers stay traceable after a new model rescores the same dates.
+- **A 7-day review cooldown:** score dates move with each sync, so without it the same account would get a new review and a new CSM task every day. A new notice or newly entering red skips the wait.
 - **Customer text is marked untrusted.** A planted prompt injection was ignored and flagged.
 
 ### Dashboard
@@ -83,7 +90,7 @@ An account's state is four layers, each answering a different question:
 |---|---|
 | Data | `verify_blueprint.py`: all 27 designed edge cases present, with counts |
 | Pipeline | `verify_warehouse.py`: 15 checks against the lake and ground truth (exactly-once, dedupe, merges, no cross-tenant links, identity precision 99.96%, stalled feed flagged, agent briefs cited) |
-| Model | Time-based test window. PR-AUC 0.29 vs 0.04 for rules; top-10 precision 14.3% vs a 2.8% base rate; 81% of real churners listed in the 90 days before, with a median 66–72 days' warning. Calibration table, trap-group false alarms, ablation (`MODEL_REPORT.md`) |
+| Model | Rolling time-based test window, notice accounts left out. PR-AUC 0.28 vs 0.18 for logistic regression and 0.03 for rules; top-10 precision 11.5% vs a 2.2% base rate; 80% of real churners listed in the 90 days before, with a median 68–75 days' warning. Calibration table, trap-group false alarms, ablation (`MODEL_REPORT.md`) |
 | Agent | Code validation of every brief, prompt-injection test, per-case `decided_by` and validation status, cost per run |
 | Dashboard | Tenant-isolation tests; headless app tests in a clean container |
 

@@ -47,10 +47,14 @@ SLIM_TABLES = {
     "silver.dim_user": "select * from silver.dim_user",
     "ml.risk_scores": "select * from ml.risk_scores",
     "ml.risk_reasons": "select * from ml.risk_reasons",
-    "gold.account_features": "select * from gold.account_features where purpose = 'score'",
+    "gold.account_features": "select * from gold.account_features where purpose = 'score' and as_of = data_as_of",
+    # Only the logged scores and reasons agent evidence cites; the full log stays in the warehouse.
+    "ml.score_log": "select * from w.ml.score_log where run_id in (select split_part(source_key, '/', 1) from w.agent.evidence where source_table = 'ml.score_log')",
+    "ml.reason_log": "select * from w.ml.reason_log where run_id in (select split_part(source_key, '/', 1) from w.agent.evidence where source_table = 'ml.reason_log')",
     "agent.cases": "select * from agent.cases",
     "agent.evidence": "select * from agent.evidence",
     "agent.tool_calls": "select * from agent.tool_calls",
+    "agent.failures": "select * from agent.failures",
     "ops.source_freshness": "select * from ops.source_freshness",
     "ops.quarantine_identity": "select * from ops.quarantine_identity",
     "silver.fct_ticket": "select * from silver.fct_ticket",
@@ -80,7 +84,11 @@ def publish_slim():
     for name, sql in SLIM_TABLES.items():
         schema, table = name.split(".")
         con.execute(f"create schema if not exists {schema}")
-        con.execute(f"create table {name} as {sql.replace(' from ', ' from w.', 1)}")
+        if not con.execute("select count(*) from duckdb_tables() where database_name = 'w' and schema_name = ? and table_name = ?",
+                           [schema, table]).fetchone()[0]:
+            continue  # a table newer than this warehouse (agent.failures before the agent's first run since it was added)
+        sql = sql if " w." in sql else sql.replace(" from ", " from w.", 1)  # entries with subqueries name w. themselves
+        con.execute(f"create table {name} as {sql}")
     con.execute("create schema if not exists app")
     con.execute("""create table app.snapshot_info as select
         ?::timestamptz as published_at,

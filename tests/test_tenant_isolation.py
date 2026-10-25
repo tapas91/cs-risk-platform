@@ -78,6 +78,18 @@ def test_other_tenant_cases_refused(con, people):
             D.source_rows(con, v, account, "silver.fct_charge", f"x/{account}")
 
 
+def test_csm_refused_colleagues_cases(con, people):
+    csm, mgr = people
+    found = con.execute("""select case_id from agent.cases where tenant_id = ? and owner_id is distinct from ?
+                           limit 1""", [csm.tenant_id, csm.user_id]).fetchone()
+    if found is None:
+        pytest.skip("no agent case on a colleague's account")
+    for f in (D.evidence, D.tool_calls):
+        with pytest.raises(D.NotVisible):
+            f(con, csm, found[0])
+        assert f(con, mgr, found[0]) is not None  # the manager still sees it
+
+
 def test_manager_pages_refused_to_csm(con, people):
     csm, mgr = people
     for f in (D.team_overview, D.agent_activity, D.quarantine_counts):

@@ -36,7 +36,14 @@ class NotVisible(Exception):
 
 
 def connect(path: str = SNAPSHOT) -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(path, read_only=True, config={"TimeZone": "UTC"})
+    """A read-only view of one published snapshot. duckdb.connect(path) would reuse the process's existing
+    database instance for that path, and the pipeline replaces the snapshot by renaming a new file over it,
+    so a long-running dashboard would keep reading the replaced file. Attaching it to a fresh in-memory
+    database opens whatever file is at the path now."""
+    con = duckdb.connect(config={"TimeZone": "UTC"})
+    con.execute(f"attach '{path.replace(chr(39), chr(39) * 2)}' as snapshot (read_only)")
+    con.execute("use snapshot")
+    return con
 
 
 def _df(con, sql: str, params: list) -> pd.DataFrame:
@@ -148,8 +155,10 @@ def evidence(con, v: Viewer, case_id: str) -> pd.DataFrame:
 
 
 def tool_calls(con, v: Viewer, case_id: str) -> pd.DataFrame:
-    if case_id.split("|")[0] != v.tenant_id:
+    tenant, account_id, _ = case_id.split("|")
+    if tenant != v.tenant_id:
         raise NotVisible(case_id)
+    _visible_account(con, v, account_id)  # a CSM sees only cases on their own accounts, as with evidence()
     return _df(con, """select t.seq, t.tool, t.input, t.result_chars, t.ms from agent.tool_calls t join agent.cases c using (case_id)
                        where c.tenant_id = ? and t.case_id = ? order by t.seq""", [v.tenant_id, case_id])
 
@@ -217,6 +226,19 @@ def source_rows(con, v: Viewer, account_id: str, source_table: str, source_key: 
                            from silver.dim_opportunity_history where tenant_id = ? and account_id = ? and valid_from <= ?
                            order by valid_from desc limit 30""", [t, a, cut])
         return "Opportunity history", rows, pd.DataFrame()
+    if source_table in ("ml.score_log", "ml.reason_log"):
+        # key: <run_id>/<account>@<as_of>[#feature]. The logged row is the score as the CSM saw it then,
+        # whatever later runs or models have done to the current table.
+        run_id, as_of = source_key.split("/", 1)[0], source_key.split("@", 1)[1].split("#", 1)[0]
+        if source_table == "ml.score_log":
+            rows = _df(con, """select as_of, model_version, round(risk_prob, 4) as risk_prob, band, status, rank_in_book,
+                                      arr_usd, days_to_renewal, scored_at from ml.score_log
+                               where tenant_id = ? and account_id = ? and run_id = ?""", [t, a, run_id])
+            return f"Score as shown on {as_of} (scoring run {run_id})", rows, pd.DataFrame()
+        rows = _df(con, """select reason_rank, reason, feature, feature_value, round(contribution, 3) as contribution
+                           from ml.reason_log where tenant_id = ? and account_id = ? and run_id = ? order by reason_rank""",
+                   [t, a, run_id])
+        return f"Reasons as shown on {as_of} (scoring run {run_id})", rows, pd.DataFrame()
     if source_table in ("gold.account_features", "ml.risk_scores", "ml.risk_reasons"):
         return "Model inputs behind today's score", features(con, v, account_id), pd.DataFrame()
     if source_table == "agent.cases":
@@ -260,6 +282,25 @@ def agent_activity(con, v: Viewer) -> pd.DataFrame:
                               c.priority, c.headline, c.decided_by
                        from agent.cases c left join silver.dim_user u on u.tenant_id = c.tenant_id and u.user_id = c.owner_id
                        where c.tenant_id = ? order by c.created_at desc""", [v.tenant_id])
+
+
+def agent_failures(con, v: Viewer) -> pd.DataFrame:
+    """Accounts the agent tried and still hasn't reviewed for that score date, latest first, with how many
+    times it tried. A failure a later run resolved isn't listed. Empty before the agent.failures table
+    exists (snapshots published before it)."""
+    if not v.is_manager:
+        raise NotVisible("agent failures")
+    if not con.execute("""select count(*) from information_schema.tables
+                          where table_schema = 'agent' and table_name = 'failures'""").fetchone()[0]:
+        return pd.DataFrame()
+    return _df(con, """select f.as_of, coalesce(s.account_name, f.account_id) as account, f.trigger, count(*) as attempts,
+                              max(f.failed_at) as last_failed_at, arg_max(f.error, f.failed_at) as last_error
+                       from agent.failures f
+                       left join ml.risk_scores s on s.tenant_id = f.tenant_id and s.account_id = f.account_id and s.as_of = f.as_of
+                       where f.tenant_id = ?
+                         and not exists (select 1 from agent.cases c where c.tenant_id = f.tenant_id
+                                         and c.account_id = f.account_id and c.as_of = f.as_of)
+                       group by all order by last_failed_at desc""", [v.tenant_id])
 
 
 def data_health(con, v: Viewer) -> pd.DataFrame:

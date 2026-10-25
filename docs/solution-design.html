@@ -54,7 +54,6 @@ section { display: grid; gap: 18px; }
 .sw.ai { background: var(--ai-bg); border-color: var(--ai); }
 .sw.warn { background: var(--warn-bg); border-color: var(--warn); }
 .sw.band { background: var(--band); border-color: var(--line); }
-.sw.todo { background: transparent; border-color: var(--muted); border-style: dashed; }
 .tag { font-family: var(--font-mono); font-size: 11px; letter-spacing: .04em; color: var(--muted); border: 1px dashed var(--muted);
        border-radius: 3px; padding: 0 6px; margin-left: 4px; white-space: nowrap; }
 
@@ -68,11 +67,9 @@ svg .ai { fill: var(--ai-bg); stroke: var(--ai); stroke-width: 1.4; }
 svg .warn { fill: var(--warn-bg); stroke: var(--warn); stroke-width: 1.4; }
 svg .bandr { fill: var(--band); stroke: var(--line); stroke-width: 1; }
 svg .acc { fill: var(--accent-bg); stroke: var(--accent); stroke-width: 1.4; }
-svg .todo { fill: var(--bg); stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 5 4; }
 svg .ttl { font-weight: 600; fill: var(--muted); }
 svg .ar { fill: none; stroke: var(--muted); stroke-width: 1.4; }
 svg .dash { stroke-dasharray: 5 4; }
-svg .fb { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 4; }
 svg .gt { fill: none; stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 5 4; }
 svg .arrowhead { fill: var(--muted); }
 svg .arrowhead-acc { fill: var(--accent); }
@@ -108,7 +105,7 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
     <div class="eyebrow">Solution design · Customer Success · as built</div>
     <h1>Account Risk Platform</h1>
     <p class="lede">A multi-tenant system that ranks each CSM's accounts by renewal risk using a fitted model, runs on its own whenever new data lands, and lets a CSM trace every number back to the data behind it. The pipeline is deterministic, and an LLM does one narrow, checked job inside it: reviewing flagged accounts.</p>
-    <p class="stack">Built with Airflow, DuckDB, dbt, LightGBM, Claude Opus 5.5 and Streamlit, on 3 years of synthetic data for 4 tenants. Dashed items are designed but not built yet.</p>
+    <p class="stack">Built with Airflow, DuckDB, dbt, LightGBM, Claude Opus 5.5 and Streamlit, on 3 years of synthetic data for 4 tenants.</p>
   </header>
 
   <section>
@@ -117,11 +114,9 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
       <span><i class="sw det"></i>Deterministic step</span>
       <span><i class="sw ai"></i>LLM step (schema-bound, validated in code)</span>
       <span><i class="sw warn"></i>Exception path</span>
-      <span><i class="sw band"></i>Applies to every step</span>
-      <span><i class="sw todo"></i>Designed, not built yet</span>
-    </div>
+      <span><i class="sw band"></i>Applies to every step</span>    </div>
     <div class="diagram-scroll">
-      <svg viewBox="0 0 1160 690" role="img" aria-label="Block diagram as built: synthetic sources are landed month by month and loaded by Airflow into DuckDB bronze; dbt builds silver history, the account master and point-in-time gold features; LightGBM is trained, gated and scores accounts; a Claude-based agent triages, investigates, routes and writes cited briefs into an outbox; a read-only Streamlit dashboard shows the worklist with trace-back. LLM enrichment, the Monday digest, the CSM assistant and CSM feedback are designed but not built. Airflow scheduling, lineage and tenant isolation span all steps.">
+      <svg viewBox="0 0 1160 690" role="img" aria-label="Block diagram as built: synthetic sources are landed month by month and loaded by Airflow into DuckDB bronze; dbt builds silver history, the account master and point-in-time gold features; LightGBM is trained, gated and scores accounts; a Claude-based agent triages, investigates, routes and writes cited briefs into an outbox; a read-only Streamlit dashboard shows the worklist with trace-back. Airflow scheduling, lineage and tenant isolation span all steps.">
         <defs>
           <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker>
           <marker id="ahA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead-acc"/></marker>
@@ -130,7 +125,7 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
 
         <!-- Scheduler band -->
         <rect x="20" y="16" width="1120" height="42" rx="4" class="bandr"/>
-        <text x="34" y="42"><tspan class="b">Airflow, dataset-chained DAGs</tspan><tspan class="sm" dx="12">bronze_ingest every 15 min → silver_build (dbt) → risk_model (features, retrain, score) → account_agent → snapshot · one writer</tspan></text>
+        <text x="34" y="42"><tspan class="b">Airflow, dataset-chained DAGs</tspan><tspan class="sm" dx="12">bronze_ingest every 15 min → silver_build (dbt) → risk_scoring (features, score) → account_agent → snapshot · risk_training monthly · one writer</tspan></text>
 
         <!-- Column headers -->
         <text x="20" y="86" class="hd">1 · SOURCES</text>
@@ -191,16 +186,8 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
         <text x="402" y="230" class="sm">silver: valid_from + known_at</text>
         <text x="402" y="245" class="sm">gold.account_features: 45</text>
         <text x="402" y="260" class="sm">inputs per account, as of date</text>
-        <rect x="390" y="296" width="190" height="94" rx="4" class="todo"/>
-        <text x="402" y="318" class="ttl">LLM enrichment</text>
-        <text x="402" y="336" class="sm">tickets → typed fields:</text>
-        <text x="402" y="351" class="sm">sentiment, cancel intent,</text>
-        <text x="402" y="366" class="sm">competitor, champion left</text>
-        <text x="402" y="381" class="sm">next step, not built</text>
         <path d="M370,290 H380 V136 H388" class="ar" marker-end="url(#ah)"/>
-        <path d="M370,330 H388" class="ar dash" marker-end="url(#ah)"/>
         <path d="M485,172 V188" class="ar" marker-end="url(#ah)"/>
-        <path d="M485,296 V276" class="ar dash" marker-end="url(#ah)"/>
 
         <!-- Col 4: model -->
         <rect x="600" y="100" width="180" height="50" rx="4" class="box"/>
@@ -208,22 +195,22 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
         <text x="612" y="139" class="sm">7 warning signs: bar to beat</text>
         <rect x="600" y="168" width="180" height="74" rx="4" class="box"/>
         <text x="612" y="190" class="b">Train (LightGBM)</text>
-        <text x="612" y="208" class="sm">logistic check, split by time</text>
-        <text x="612" y="223" class="sm">with purge gap; isotonic,</text>
+        <text x="612" y="208" class="sm">monthly; rolling windows with</text>
+        <text x="612" y="223" class="sm">purge gaps; Platt calibration,</text>
         <text x="612" y="237" class="sm">per tenant if 50+ positives</text>
         <rect x="600" y="260" width="180" height="56" rx="4" class="box"/>
         <text x="612" y="282" class="b">Registry + promotion gate</text>
         <text x="612" y="300" class="sm">beat rules and production</text>
         <rect x="600" y="334" width="180" height="94" rx="4" class="box"/>
         <text x="612" y="356" class="b">Score</text>
-        <text x="612" y="374" class="sm">every silver build, 14 dates</text>
+        <text x="612" y="374" class="sm">new data → 14 weekly dates</text>
         <text x="612" y="389" class="sm">risk × ARR × renewal proximity</text>
         <text x="612" y="404" class="sm">TreeSHAP reasons per score</text>
         <text x="612" y="419" class="sm">hysteresis: red 0.25 → 0.18</text>
         <rect x="600" y="446" width="180" height="56" rx="4" class="acc"/>
         <text x="612" y="468" class="b">Evaluate</text>
-        <text x="612" y="486" class="sm">PR-AUC 0.29 vs 0.04 (rules)</text>
-        <text x="612" y="498" class="sm">81% of churners flagged early</text>
+        <text x="612" y="486" class="sm">PR-AUC 0.28 vs 0.03 (rules)</text>
+        <text x="612" y="498" class="sm">80% of churners flagged early</text>
         <path d="M580,232 H590 V125 H598" class="ar" marker-end="url(#ah)"/>
         <path d="M590,205 H598" class="ar" marker-end="url(#ah)"/>
         <path d="M590,232 V381 H598" class="ar" marker-end="url(#ah)"/>
@@ -260,32 +247,17 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
         <rect x="990" y="100" width="150" height="56" rx="4" class="box"/>
         <text x="1002" y="122" class="b">Action outbox</text>
         <text x="1002" y="140" class="sm">agent.actions, no dupes</text>
-        <rect x="990" y="172" width="150" height="50" rx="4" class="todo"/>
-        <text x="1002" y="193" class="ttl">Monday digest</text>
-        <text x="1002" y="211" class="sm">next step, not built</text>
-        <rect x="990" y="238" width="150" height="74" rx="4" class="box"/>
-        <text x="1002" y="260" class="b">CSM dashboard</text>
-        <text x="1002" y="278" class="sm">list → SHAP → brief →</text>
-        <text x="1002" y="293" class="sm">evidence → source rows →</text>
-        <text x="1002" y="306" class="sm">bronze file (Streamlit)</text>
-        <rect x="990" y="328" width="150" height="64" rx="4" class="todo"/>
-        <text x="1002" y="350" class="ttl">CSM assistant</text>
-        <text x="1002" y="368" class="sm">cited Q&amp;A, own accounts</text>
-        <text x="1002" y="381" class="sm">next step, not built</text>
-        <rect x="990" y="408" width="150" height="64" rx="4" class="todo"/>
-        <text x="1002" y="430" class="ttl">CSM feedback</text>
-        <text x="1002" y="448" class="sm">draft approval, ratings</text>
-        <text x="1002" y="461" class="sm">future enhancement</text>
+        <rect x="990" y="172" width="150" height="74" rx="4" class="box"/>
+        <text x="1002" y="194" class="b">CSM dashboard</text>
+        <text x="1002" y="212" class="sm">list → SHAP → brief →</text>
+        <text x="1002" y="227" class="sm">evidence → source rows →</text>
+        <text x="1002" y="240" class="sm">bronze file (Streamlit)</text>
         <path d="M970,298 H980 V128 H988" class="ar" marker-end="url(#ah)"/>
-        <path d="M970,395 H984 V275 H988" class="ar" marker-end="url(#ah)"/>
-        <path d="M984,275 V197 H988" class="ar dash" marker-end="url(#ah)"/>
-        <path d="M1065,392 V406" class="ar dash" marker-end="url(#ah)"/>
+        <path d="M970,395 H984 V209 H988" class="ar" marker-end="url(#ah)"/>
 
-        <!-- Feedback + ground truth loops -->
+        <!-- Ground truth loop -->
         <path d="M100,510 V528 H700 V504" class="gt" marker-end="url(#ahW)"/>
         <text x="200" y="522" class="sm">ground truth: evaluation and simulated analyst labels only, never training</text>
-        <path d="M1065,472 V542 H740 V504" class="fb" marker-end="url(#ah)"/>
-        <text x="790" y="536" class="sm">CSM feedback → labels (future)</text>
 
         <!-- Cross-cutting bands -->
         <rect x="20" y="568" width="1120" height="46" rx="4" class="bandr"/>
@@ -315,7 +287,7 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
       <div class="group">
         <h3>Account identity</h3>
         <ul>
-          <li><span class="case">Stripe customer with no Salesforce ID.</span> <span class="handled">Matched by contact email or company domain. Each rule's confidence is measured on 1,260 labeled matches; records with no confident match (51 Stripe customers) go to quarantine.</span></li>
+          <li><span class="case">Stripe customer with no Salesforce ID.</span> <span class="handled">Matched by contact email or company domain. Each rule's confidence is measured on 1,089 labeled matches; records with no confident match (51 Stripe customers) go to quarantine. An email shared by two accounts (a consultant, a shared mailbox) matches neither, rather than the first one found.</span></li>
           <li><span class="case">Shared domains like gmail.com.</span> <span class="handled">Excluded from domain matching through a seed list, or every personal mailbox would merge into one "account".</span></li>
           <li><span class="case">Several workspaces, parent and child accounts, mergers.</span> <span class="handled">Merged Salesforce duplicates redirect to their master; each workspace maps to its account; parent and child stay separate accounts. <span class="tag">Next step</span> Roll-up to the parent.</span></li>
           <li><span class="case">The same real company is a customer of two tenants.</span> <span class="handled">Never merged: matching runs inside a tenant only. 31 such pairs stay apart, and a test enforces it.</span></li>
@@ -325,9 +297,9 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
         <h3>Modeling</h3>
         <ul>
           <li><span class="case">Accounts with almost no data.</span> <span class="handled">They get an "insufficient data" status, separate from low risk, and the dashboard says so. They're still scored, and dark accounts near renewal go to the agent.</span></li>
-          <li><span class="case">Features that leak the outcome.</span> <span class="handled">Customer notices (cancellation requests, scheduled cancellations, agent risk flags) aren't model inputs; they're shown to the CSM as known risk. Features only use data known by the as-of date, and the time split has a purge gap.</span></li>
+          <li><span class="case">Features that leak the outcome.</span> <span class="handled">Customer notices (cancellation requests, scheduled cancellations, agent risk flags) aren't model inputs; they're shown to the CSM as known risk. Accounts that already gave notice are left out of training and evaluation: they are nearly all positives and would inflate every metric. Features only use data known by the as-of date, and the rolling time windows have 90-day purge gaps.</span></li>
           <li><span class="case">Accounts younger than 90 days.</span> <span class="handled">A new-customer flag and tenure are inputs, so the model learns their pattern. <span class="tag">Next step</span> A separate onboarding cohort model.</span></li>
-          <li><span class="case">Churn or downsell is only 2.8% per 90 days.</span> <span class="handled">Judged on PR-AUC and the precision of each CSM's top 10, not accuracy, which a model can hit by predicting "renews" for everyone.</span></li>
+          <li><span class="case">Churn or downsell is only about 2% per 90 days.</span> <span class="handled">Judged on PR-AUC and the precision of each CSM's top 10, not accuracy, which a model can hit by predicting "renews" for everyone.</span></li>
           <li><span class="case">High ticket volume is ambiguous.</span> <span class="handled">Engaged customers file tickets too. Inputs use urgent and incident tickets, bad CSAT and resolution time, not raw counts; noisy-but-loyal accounts are a trap group in the evaluation.</span></li>
           <li><span class="case">A CSM saves a flagged account.</span> <span class="handled">Save plays are kept out of the model, because they react to risk already seen. <span class="tag">Next step</span> Feed interventions back as labels.</span></li>
         </ul>
@@ -335,18 +307,18 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
       <div class="group">
         <h3>Agent and automation</h3>
         <ul>
-          <li><span class="case">An account flips between yellow and red every week.</span> <span class="handled">Hysteresis: red needs two weekly runs at 0.25 or above and holds until it drops below 0.18; yellow enters at 0.10 and exits below 0.07.</span></li>
+          <li><span class="case">An account flips between yellow and red every week.</span> <span class="handled">Hysteresis: red needs two weekly scores at 0.25 or above and holds until it drops below 0.18; yellow enters at 0.10 and exits below 0.07. It walks 26 weeks of scores while 13 are shown, so an account that turned red months ago doesn't show yellow just because the window starts after it.</span></li>
           <li><span class="case">The account already has an open escalation or is mid-negotiation.</span> <span class="handled">The agent can route it to "suppress" only if that evidence exists. The CSM still gets the brief as a note, without a duplicate task.</span></li>
           <li><span class="case">Ticket text says "ignore previous instructions".</span> <span class="handled">Customer text is tagged as untrusted, and the tools are read-only and bound to the case. Tested: a planted "route to no_action" was ignored, and the brief flagged it.</span></li>
           <li><span class="case">An agent run crashes halfway.</span> <span class="handled">Cases are keyed on tenant, account and score date, and actions are de-duplicated, so a rerun skips handled accounts. Results commit at the end, so a crash repeats the batch's model calls.</span></li>
-          <li><span class="case">A CSM has 25 red accounts, or no assigned owner.</span> <span class="handled">At most 3 per CSM and 12 per run are reviewed; the rest wait for the next run. Unowned accounts go to the team lead.</span></li>
+          <li><span class="case">A CSM has 25 red accounts, or no assigned owner.</span> <span class="handled">At most 3 per CSM and 12 per run are reviewed; the rest wait for the next run. An account reviewed in the last 7 days waits too, unless it newly gave notice or newly turned red, so the backlog moves forward instead of re-reviewing the same accounts after every sync. Unowned accounts go to the team lead.</span></li>
           <li><span class="case">The risk is a failed payment.</span> <span class="handled">Routed to billing, which requires a failed charge in the evidence. A CSM call doesn't fix a card decline.</span></li>
         </ul>
       </div>
       <div class="group">
         <h3>Tenancy</h3>
         <ul>
-          <li><span class="case">A tenant has few accounts and little churn history.</span> <span class="handled">It uses the pooled model; per-tenant calibration applies only where a tenant has 50+ positives (Helio and Northwind today).</span></li>
+          <li><span class="case">A tenant has few accounts and little churn history.</span> <span class="handled">It uses the pooled model and the pooled calibration curve; a tenant gets its own curve only with 50+ positives in the calibration half of validation (none today).</span></li>
           <li><span class="case">One tenant's 3-year backfill.</span> <span class="handled">Each tenant's first sync carries its pre-window history; all warehouse writes share one pool, so loads queue rather than collide. <span class="tag">Next step</span> Per-tenant quotas.</span></li>
           <li><span class="case">A tenant leaves.</span> <span class="handled"><span class="tag">Next step</span> Delete its partitions and agent records, then retrain the pooled model without its rows.</span></li>
         </ul>
@@ -354,8 +326,8 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
       <div class="group">
         <h3>Traceability</h3>
         <ul>
-          <li><span class="case">The brief says "usage down 40%"; the feature says 38%.</span> <span class="handled">The validator rejects it: every number in a sentence must appear in a fact the sentence cites. One retry, then the rules write a template brief.</span></li>
-          <li><span class="case">The model was retrained since last week.</span> <span class="handled">Every score row carries its model version, and <code>ml.model_registry</code> records every model and every promotion decision.</span></li>
+          <li><span class="case">The brief says "usage down 40%"; the feature says 38%.</span> <span class="handled">The validator rejects it: every number in a sentence must appear in a fact the sentence cites. Numbers are compared as values, so "3" doesn't pass because a fact says "30", and dates and evidence IDs aren't mistaken for numbers. One retry, then the rules write a template brief.</span></li>
+          <li><span class="case">The model was retrained since last week.</span> <span class="handled">Training is monthly and separate from scoring. A promoted model rescores all 14 weekly dates at once, so week-on-week change always compares one model with itself. What the CSM was shown before is kept: <code>ml.score_log</code> appends each account's shown score whenever it changes, and agent briefs cite that log, so a brief written under the old model still traces to the numbers it quoted. Every score row carries its model version, and <code>ml.model_registry</code> records every model, the time windows it used and every promotion decision.</span></li>
           <li><span class="case">A CSM disputes a score.</span> <span class="handled">The dashboard goes from score to reasons to the exact input row, and from each brief sentence to its evidence, its source rows and the landed bronze file.</span></li>
         </ul>
       </div>
@@ -371,6 +343,7 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
           <tr><td>System shape</td><td class="chose">Deterministic pipeline + one bounded agent</td><td class="over">An agent per source plus orchestrator and router</td><td>Scores must come out the same on every run and be testable against history. The agent earns its place where judgment helps: investigating, routing and writing.</td></tr>
           <tr><td>Orchestration and storage</td><td class="chose">Airflow + DuckDB + dbt</td><td class="over">Spark + Iceberg + Trino; streaming</td><td>Lightweight enough to run on a laptop, familiar to reviewers. dbt gives tests and lineage that hand-written Python operators wouldn't.</td></tr>
           <tr><td>Scoring model</td><td class="chose">LightGBM, with logistic regression and rules as baselines</td><td class="over">Sequence models; an LLM's judgment</td><td>Tabular data and few labels. Trees train in seconds, give exact per-prediction reasons and calibrate well. An LLM's score isn't reproducible or calibrated.</td></tr>
+          <tr><td>Training cadence</td><td class="chose">Monthly retrain, separate from scoring</td><td class="over">Retrain on every data change</td><td>A label needs 90 days to mature, so new training examples arrive once a month. Retraining on every sync refits the same data and changes every score for no gain. Scoring follows the data and always uses the production model, so a failed or rejected retrain never stops it.</td></tr>
           <tr><td>Role of the LLM</td><td class="chose">Investigator and brief writer in the agent, validated by code</td><td class="over">Scorer</td><td>Its value is in reading context and writing for a person. Code decides what it may see, which routes are allowed, and whether its brief stands. Ticket-text features and the CSM assistant are next steps.</td></tr>
           <tr><td>Account matching</td><td class="chose">Deterministic rules; confidence measured on labels</td><td class="over">A probabilistic matcher (Splink)</td><td>The rules are 99.96% precise. What's left is ambiguity between near-identical accounts, where Splink would need new evidence anyway: a scoped next step.</td></tr>
           <tr><td>Across tenants</td><td class="chose">Pooled base model + per-tenant calibration</td><td class="over">One model per tenant</td><td>Small tenants can't train their own model. Pooling needs contract permission; large tenants could opt into a dedicated model.</td></tr>
@@ -380,7 +353,7 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
           <tr><td>Tuning target</td><td class="chose">Precision of each CSM's top 10, recall monitored</td><td class="over">Maximize recall</td><td>False alarms erode trust and the list stops being opened. Accounts below the cut stay in the book, ranked.</td></tr>
           <tr><td>Customer outreach</td><td class="chose">Drafted by the agent, sent by the CSM</td><td class="over">Auto-email when an account goes red</td><td>A wrong email to an unhappy customer costs far more than a wrong row on a list. Drafts are shown read-only with a copy button.</td></tr>
           <tr><td>Dashboard</td><td class="chose">Read-only, over a published snapshot</td><td class="over">Live reads with approvals and feedback</td><td>Can't block the single-writer warehouse or leak through a write path. Feedback has no consumer yet, so it's a future enhancement.</td></tr>
-          <tr><td>History</td><td class="chose">Append-only bronze; silver history with source and arrival time; scores tied to model version</td><td class="over">Overwrite in place</td><td>Past scores reproduce from data known at the time, and every score names the model that made it.</td></tr>
+          <tr><td>History</td><td class="chose">Append-only bronze; silver history with source and arrival time; a current score window plus an append-only log of what was shown</td><td class="over">Overwrite in place; or logging every score date on every run</td><td>Past scores reproduce from data known at the time, and every score names the model that made it. The log keeps only the latest date, and only when it changed: the older dates in the window are recomputations, and a rerun on unchanged data adds nothing.</td></tr>
         </tbody>
       </table>
     </div>
@@ -391,16 +364,16 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
     <ul class="details">
       <li><b>Some churners are undetectable on purpose.</b><span>The generator includes churn with no warning signs (budget cuts, acquisitions), so evaluation reflects the real ceiling instead of a perfect score.</span></li>
       <li><b>"Unknown" is different from "healthy".</b><span>Accounts with thin data say "insufficient data" on screen, and stale feeds get a banner.</span></li>
-      <li><b>Calibrated probabilities.</b><span>Isotonic calibration on validation: accounts scored around 12% churned 12.9% of the time in the test window.</span></li>
+      <li><b>Calibrated probabilities.</b><span>Platt calibration, fit on validation accounts that the booster's early stopping didn't see. Accurate at the low end, where most accounts sit (0.4% predicted, 0.4% observed); it over-predicts the 10–35% range, which a larger calibration set will tighten. Isotonic was tried and dropped: on about 100 positives it overfit into steps whose ties cost ranking quality.</span></li>
       <li><b>Priority weighs money and time.</b><span>Risk × ARR × up to 2× inside 180 days of renewal, so a yellow account renewing soon can outrank a red one renewing in 11 months.</span></li>
-      <li><b>A gate for promoting new models.</b><span>A retrained model goes live only if it beats the rules baseline and doesn't lose to production on the same test window. Every decision is logged.</span></li>
+      <li><b>A gate for promoting new models.</b><span>A retrained model goes live only if it beats the rules baseline and doesn't lose to production on the same test window. The windows roll forward with the labels, so each monthly retrain learns from one more month and is tested on data no earlier model trained on. Every decision is logged.</span></li>
       <li><b>Labels come from what the business recorded.</b><span>Churn and downsell come from Salesforce and Stripe, never from the generator's answers; they match all 639 real churns. <span class="tag">Future</span> CSM feedback as extra labels.</span></li>
       <li><b>Gmail privacy.</b><span>Metadata only: no message bodies are generated or stored. <span class="tag">Next step</span> PII redaction and per-tenant opt-in before ticket text reaches the LLM.</span></li>
       <li><b>LLM cost control.</b><span>Triage caps (12 per run, 3 per CSM), prompt caching, medium effort: about $0.05 per account, logged per run in <code>agent.runs</code>.</span></li>
       <li><b>Missing renewal dates.</b><span>The contract anniversary stands in, and "renewal date missing" is a model input rather than a silent default.</span></li>
       <li><b>Monitoring the monitor.</b><span>Feed freshness per tenant, quarantine counts and dbt tests on every build. <span class="tag">Next step</span> Feature drift between training and scoring.</span></li>
       <li><b>Secrets stay out of the image.</b><span>The API key is injected at runtime from a git-ignored <code>.env</code>; without it the agent runs on rules.</span></li>
-      <li><b>One writer, by design.</b><span>Every warehouse task shares a single-slot pool, so DuckDB's one-writer rule never surfaces as a random failure.</span></li>
+      <li><b>One writer, by design.</b><span>Every warehouse task shares a single-slot pool, so DuckDB's one-writer rule never surfaces as a random failure. On-demand agent reviews go through Airflow and queue for the same pool; ad-hoc queries go to the published snapshot, because any session on the live file, read-only included, blocks the pipeline's writes.</span></li>
     </ul>
   </section>
 </div>

@@ -12,8 +12,9 @@ redirect as (  -- any Salesforce ID ever seen, including merged duplicates, to i
 names as (
     select tenant_id, name_key, min(account_id) as account_id, count(*) as n from accounts group by 1, 2
 ),
-contacts as (
-    select distinct tenant_id, email, account_id from {{ ref('dim_contact_history') }}
+contacts as (  -- an email used at two accounts (a shared mailbox, a consultant) identifies neither
+    select tenant_id, email, min(account_id) as account_id from {{ ref('dim_contact_history') }}
+    group by 1, 2 having count(distinct account_id) = 1
 ),
 
 stripe as (select * from {{ ref('stg_stripe__customer') }} qualify row_number() over (partition by tenant_id, customer_id order by known_at desc) = 1),

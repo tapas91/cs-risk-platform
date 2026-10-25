@@ -1,6 +1,8 @@
 -- The dates the model looks at the world from.
 --   train: first of every month whose 90-day outcome window has fully passed by the data date
---   score: every Monday of the last 13 weeks plus the data date itself (for week-on-week movement)
+--   score: the data date and the 26 weeks before it, 7 days apart. The CSM sees the latest 14 (13 weeks of
+--          movement); the older 13 only warm up the bands' hysteresis, so a band doesn't depend on where
+--          the window happens to start (see pipeline/risk_model.py, SHOWN_SCORE_DATES)
 -- data_as_of is the newest arrival in the warehouse, not the clock: this dataset is a fixed dump.
 {% set horizon = var('label_horizon_days') %}
 with watermark as (
@@ -12,7 +14,7 @@ train as (
                                   interval 1 month))::date as as_of, 'train' as purpose
 ),
 score as (
-    select unnest(generate_series((select data_as_of from watermark) - interval 91 day,
+    select unnest(generate_series((select data_as_of from watermark) - interval 182 day,
                                   (select data_as_of from watermark), interval 7 day))::date as as_of, 'score' as purpose
 )
 select as_of, purpose, cast(as_of as timestamptz) as as_of_ts, (select data_as_of from watermark) as data_as_of

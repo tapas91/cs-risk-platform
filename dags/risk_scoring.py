@@ -1,14 +1,15 @@
-"""risk_model: rebuild point-in-time features, retrain, gate, and score, whenever silver changes.
+"""risk_scoring: rebuild point-in-time features and score every live customer, whenever silver changes.
 
-    gold features (dbt) -> train + promotion gate -> score live customers
+    gold features (dbt) -> score with the production model -> RISK
 
 Triggered by the SILVER dataset, so nothing has to start it: new files land, bronze loads them,
-silver rebuilds, and this DAG refreshes every account's score.
+silver rebuilds, and this DAG refreshes every account's score. It never trains: scoring always uses
+whichever model is in production, so a failed or rejected retrain (risk_training) can't stop new
+data being scored, and scores only change when the data does.
 
-Training runs every time (seconds at this size). A new model only replaces the production model if it
-beats the hand-written rules baseline and doesn't lose to production on the same test window; the
-decision is written to ml.model_registry either way. Scoring always uses whichever model is in
-production. The ML code runs in its own virtualenv (ML_PYTHON); every step uses the duckdb pool."""
+Before the first model is promoted there is nothing to score with: score_accounts exits 99, Airflow
+marks it skipped, and RISK doesn't fire. The ML code runs in its own virtualenv (ML_PYTHON); every
+step uses the duckdb pool."""
 import os
 from datetime import datetime, timedelta
 
@@ -24,20 +25,20 @@ ML = f'cd /opt/airflow && {os.environ.get("ML_PYTHON", "python")} -m pipeline.ri
 
 
 @dag(
-    dag_id="risk_model",
+    dag_id="risk_scoring",
     schedule=[SILVER],
     start_date=datetime(2026, 10, 1),
     catchup=False,
     max_active_runs=1,
+    is_paused_upon_creation=True,
     default_args=dict(owner="data-platform", retries=1, retry_delay=timedelta(minutes=1), pool="duckdb"),
     tags=["gold", "ml"],
     doc_md=__doc__,
 )
-def risk_model():
+def risk_scoring():
     features = BashOperator(task_id="build_features", bash_command=f"{DBT} build --select path:models/gold {DBT_ARGS}")
-    train = BashOperator(task_id="train_and_gate", bash_command=f"{ML} train")
-    score = BashOperator(task_id="score_accounts", bash_command=f"{ML} score", outlets=[RISK])
-    features >> train >> score
+    score = BashOperator(task_id="score_accounts", bash_command=f"{ML} score", skip_on_exit_code=99, outlets=[RISK])
+    features >> score
 
 
-risk_model()
+risk_scoring()
