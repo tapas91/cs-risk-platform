@@ -36,7 +36,14 @@ class NotVisible(Exception):
 
 
 def connect(path: str = SNAPSHOT) -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(path, read_only=True, config={"TimeZone": "UTC"})
+    """A read-only view of one published snapshot. duckdb.connect(path) would reuse the process's existing
+    database instance for that path, and the pipeline replaces the snapshot by renaming a new file over it,
+    so a long-running dashboard would keep reading the replaced file. Attaching it to a fresh in-memory
+    database opens whatever file is at the path now."""
+    con = duckdb.connect(config={"TimeZone": "UTC"})
+    con.execute(f"attach '{path.replace(chr(39), chr(39) * 2)}' as snapshot (read_only)")
+    con.execute("use snapshot")
+    return con
 
 
 def _df(con, sql: str, params: list) -> pd.DataFrame:
@@ -148,8 +155,10 @@ def evidence(con, v: Viewer, case_id: str) -> pd.DataFrame:
 
 
 def tool_calls(con, v: Viewer, case_id: str) -> pd.DataFrame:
-    if case_id.split("|")[0] != v.tenant_id:
+    tenant, account_id, _ = case_id.split("|")
+    if tenant != v.tenant_id:
         raise NotVisible(case_id)
+    _visible_account(con, v, account_id)  # a CSM sees only cases on their own accounts, as with evidence()
     return _df(con, """select t.seq, t.tool, t.input, t.result_chars, t.ms from agent.tool_calls t join agent.cases c using (case_id)
                        where c.tenant_id = ? and t.case_id = ? order by t.seq""", [v.tenant_id, case_id])
 
