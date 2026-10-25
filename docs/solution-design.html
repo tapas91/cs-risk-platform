@@ -54,7 +54,6 @@ section { display: grid; gap: 18px; }
 .sw.ai { background: var(--ai-bg); border-color: var(--ai); }
 .sw.warn { background: var(--warn-bg); border-color: var(--warn); }
 .sw.band { background: var(--band); border-color: var(--line); }
-.sw.todo { background: transparent; border-color: var(--muted); border-style: dashed; }
 .tag { font-family: var(--font-mono); font-size: 11px; letter-spacing: .04em; color: var(--muted); border: 1px dashed var(--muted);
        border-radius: 3px; padding: 0 6px; margin-left: 4px; white-space: nowrap; }
 
@@ -68,11 +67,9 @@ svg .ai { fill: var(--ai-bg); stroke: var(--ai); stroke-width: 1.4; }
 svg .warn { fill: var(--warn-bg); stroke: var(--warn); stroke-width: 1.4; }
 svg .bandr { fill: var(--band); stroke: var(--line); stroke-width: 1; }
 svg .acc { fill: var(--accent-bg); stroke: var(--accent); stroke-width: 1.4; }
-svg .todo { fill: var(--bg); stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 5 4; }
 svg .ttl { font-weight: 600; fill: var(--muted); }
 svg .ar { fill: none; stroke: var(--muted); stroke-width: 1.4; }
 svg .dash { stroke-dasharray: 5 4; }
-svg .fb { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 4; }
 svg .gt { fill: none; stroke: var(--warn); stroke-width: 1.4; stroke-dasharray: 5 4; }
 svg .arrowhead { fill: var(--muted); }
 svg .arrowhead-acc { fill: var(--accent); }
@@ -108,7 +105,7 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
     <div class="eyebrow">Solution design · Customer Success · as built</div>
     <h1>Account Risk Platform</h1>
     <p class="lede">A multi-tenant system that ranks each CSM's accounts by renewal risk using a fitted model, runs on its own whenever new data lands, and lets a CSM trace every number back to the data behind it. The pipeline is deterministic, and an LLM does one narrow, checked job inside it: reviewing flagged accounts.</p>
-    <p class="stack">Built with Airflow, DuckDB, dbt, LightGBM, Claude Opus 5.5 and Streamlit, on 3 years of synthetic data for 4 tenants. Dashed items are designed but not built yet.</p>
+    <p class="stack">Built with Airflow, DuckDB, dbt, LightGBM, Claude Opus 5.5 and Streamlit, on 3 years of synthetic data for 4 tenants.</p>
   </header>
 
   <section>
@@ -117,11 +114,9 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
       <span><i class="sw det"></i>Deterministic step</span>
       <span><i class="sw ai"></i>LLM step (schema-bound, validated in code)</span>
       <span><i class="sw warn"></i>Exception path</span>
-      <span><i class="sw band"></i>Applies to every step</span>
-      <span><i class="sw todo"></i>Designed, not built yet</span>
-    </div>
+      <span><i class="sw band"></i>Applies to every step</span>    </div>
     <div class="diagram-scroll">
-      <svg viewBox="0 0 1160 690" role="img" aria-label="Block diagram as built: synthetic sources are landed month by month and loaded by Airflow into DuckDB bronze; dbt builds silver history, the account master and point-in-time gold features; LightGBM is trained, gated and scores accounts; a Claude-based agent triages, investigates, routes and writes cited briefs into an outbox; a read-only Streamlit dashboard shows the worklist with trace-back. LLM enrichment, the Monday digest, the CSM assistant and CSM feedback are designed but not built. Airflow scheduling, lineage and tenant isolation span all steps.">
+      <svg viewBox="0 0 1160 690" role="img" aria-label="Block diagram as built: synthetic sources are landed month by month and loaded by Airflow into DuckDB bronze; dbt builds silver history, the account master and point-in-time gold features; LightGBM is trained, gated and scores accounts; a Claude-based agent triages, investigates, routes and writes cited briefs into an outbox; a read-only Streamlit dashboard shows the worklist with trace-back. Airflow scheduling, lineage and tenant isolation span all steps.">
         <defs>
           <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker>
           <marker id="ahA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead-acc"/></marker>
@@ -191,16 +186,8 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
         <text x="402" y="230" class="sm">silver: valid_from + known_at</text>
         <text x="402" y="245" class="sm">gold.account_features: 45</text>
         <text x="402" y="260" class="sm">inputs per account, as of date</text>
-        <rect x="390" y="296" width="190" height="94" rx="4" class="todo"/>
-        <text x="402" y="318" class="ttl">LLM enrichment</text>
-        <text x="402" y="336" class="sm">tickets → typed fields:</text>
-        <text x="402" y="351" class="sm">sentiment, cancel intent,</text>
-        <text x="402" y="366" class="sm">competitor, champion left</text>
-        <text x="402" y="381" class="sm">next step, not built</text>
         <path d="M370,290 H380 V136 H388" class="ar" marker-end="url(#ah)"/>
-        <path d="M370,330 H388" class="ar dash" marker-end="url(#ah)"/>
         <path d="M485,172 V188" class="ar" marker-end="url(#ah)"/>
-        <path d="M485,296 V276" class="ar dash" marker-end="url(#ah)"/>
 
         <!-- Col 4: model -->
         <rect x="600" y="100" width="180" height="50" rx="4" class="box"/>
@@ -260,32 +247,17 @@ code { font-family: var(--font-mono); font-size: .88em; background: var(--band);
         <rect x="990" y="100" width="150" height="56" rx="4" class="box"/>
         <text x="1002" y="122" class="b">Action outbox</text>
         <text x="1002" y="140" class="sm">agent.actions, no dupes</text>
-        <rect x="990" y="172" width="150" height="50" rx="4" class="todo"/>
-        <text x="1002" y="193" class="ttl">Monday digest</text>
-        <text x="1002" y="211" class="sm">next step, not built</text>
-        <rect x="990" y="238" width="150" height="74" rx="4" class="box"/>
-        <text x="1002" y="260" class="b">CSM dashboard</text>
-        <text x="1002" y="278" class="sm">list → SHAP → brief →</text>
-        <text x="1002" y="293" class="sm">evidence → source rows →</text>
-        <text x="1002" y="306" class="sm">bronze file (Streamlit)</text>
-        <rect x="990" y="328" width="150" height="64" rx="4" class="todo"/>
-        <text x="1002" y="350" class="ttl">CSM assistant</text>
-        <text x="1002" y="368" class="sm">cited Q&amp;A, own accounts</text>
-        <text x="1002" y="381" class="sm">next step, not built</text>
-        <rect x="990" y="408" width="150" height="64" rx="4" class="todo"/>
-        <text x="1002" y="430" class="ttl">CSM feedback</text>
-        <text x="1002" y="448" class="sm">draft approval, ratings</text>
-        <text x="1002" y="461" class="sm">future enhancement</text>
+        <rect x="990" y="172" width="150" height="74" rx="4" class="box"/>
+        <text x="1002" y="194" class="b">CSM dashboard</text>
+        <text x="1002" y="212" class="sm">list → SHAP → brief →</text>
+        <text x="1002" y="227" class="sm">evidence → source rows →</text>
+        <text x="1002" y="240" class="sm">bronze file (Streamlit)</text>
         <path d="M970,298 H980 V128 H988" class="ar" marker-end="url(#ah)"/>
-        <path d="M970,395 H984 V275 H988" class="ar" marker-end="url(#ah)"/>
-        <path d="M984,275 V197 H988" class="ar dash" marker-end="url(#ah)"/>
-        <path d="M1065,392 V406" class="ar dash" marker-end="url(#ah)"/>
+        <path d="M970,395 H984 V209 H988" class="ar" marker-end="url(#ah)"/>
 
-        <!-- Feedback + ground truth loops -->
+        <!-- Ground truth loop -->
         <path d="M100,510 V528 H700 V504" class="gt" marker-end="url(#ahW)"/>
         <text x="200" y="522" class="sm">ground truth: evaluation and simulated analyst labels only, never training</text>
-        <path d="M1065,472 V542 H740 V504" class="fb" marker-end="url(#ah)"/>
-        <text x="790" y="536" class="sm">CSM feedback → labels (future)</text>
 
         <!-- Cross-cutting bands -->
         <rect x="20" y="568" width="1120" height="46" rx="4" class="bandr"/>
