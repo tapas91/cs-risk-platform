@@ -35,6 +35,11 @@ def _rows(con, sql: str, params: list) -> List[dict]:
     return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
+def _has_table(con, schema: str, table: str) -> bool:
+    return con.execute("select count(*) from information_schema.tables where table_schema = ? and table_name = ?",
+                       [schema, table]).fetchone()[0] > 0
+
+
 def _clip(text: Optional[str], n: int = 400) -> str:
     text = (text or "").replace(UNTRUSTED_OPEN, "").replace(UNTRUSTED_CLOSE, "")
     return text if len(text) <= n else text[:n] + "..."
@@ -51,13 +56,19 @@ def get_risk_summary(con, case: Case) -> dict:
     if not now:
         return {"error": "no score for this account on this date"}
     s = now[0]
+    # Cite the score log, not the current table: ml.risk_scores is rewritten every run (and by a new model),
+    # while the logged row keeps the exact numbers this brief quotes. Before the log existed, fall back.
+    logged = _rows(con, """select run_id from ml.score_log where tenant_id = ? and account_id = ? and as_of = ?
+                           order by scored_at desc limit 1""", [case.tenant_id, case.account_id, case.as_of]) \
+        if _has_table(con, "ml", "score_log") else []
+    scores, reasons = ("ml.score_log", "ml.reason_log") if logged else ("ml.risk_scores", "ml.risk_reasons")
+    key = f"{logged[0]['run_id']}/{case.account_id}@{case.as_of}" if logged else f"{case.account_id}@{case.as_of}"
     facts = [
-        case.fact(f"Model risk of churn or downsell in 90 days: {s['risk_prob']:.0%} ({s['band']})", "ml.risk_scores",
-                  f"{case.account_id}@{case.as_of}", s["risk_prob"]),
-        case.fact(f"Annual revenue about ${s['arr_usd']:,.0f}", "ml.risk_scores", f"{case.account_id}@{case.as_of}", s["arr_usd"]),
+        case.fact(f"Model risk of churn or downsell in 90 days: {s['risk_prob']:.0%} ({s['band']})", scores, key, s["risk_prob"]),
+        case.fact(f"Annual revenue about ${s['arr_usd']:,.0f}", scores, key, s["arr_usd"]),
         case.fact(f"Renewal in {s['days_to_renewal']} days", "gold.account_features", f"{case.account_id}@{case.as_of}",
                   s["days_to_renewal"]),
-        case.fact(f"Rank {s['rank_in_book']} in the CSM's book", "ml.risk_scores", f"{case.account_id}@{case.as_of}", s["rank_in_book"]),
+        case.fact(f"Rank {s['rank_in_book']} in the CSM's book", scores, key, s["rank_in_book"]),
     ]
     if s["notices"]:
         facts.append(case.fact(f"Customer notice on record: {s['notices']}", "gold.account_features", f"{case.account_id}@{case.as_of}"))
@@ -67,8 +78,7 @@ def get_risk_summary(con, case: Case) -> dict:
     for r in _rows(con, """select reason_rank, feature, feature_value, reason from ml.risk_reasons
                            where tenant_id = ? and account_id = ? and as_of = ? order by reason_rank""",
                    [case.tenant_id, case.account_id, case.as_of]):
-        facts.append(case.fact(f"Model reason {r['reason_rank']}: {r['reason']}", "ml.risk_reasons",
-                               f"{case.account_id}@{case.as_of}#{r['feature']}", r["feature_value"]))
+        facts.append(case.fact(f"Model reason {r['reason_rank']}: {r['reason']}", reasons, f"{key}#{r['feature']}", r["feature_value"]))
     trend = _rows(con, """select as_of, round(risk_prob, 3) as risk, band from ml.risk_scores
                           where tenant_id = ? and account_id = ? and as_of <= ? order by as_of""",
                   [case.tenant_id, case.account_id, case.as_of])

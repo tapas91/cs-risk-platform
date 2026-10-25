@@ -9,6 +9,9 @@ Reads gold.account_features / gold.account_labels (built by dbt) and writes to t
     ml.risk_scores        one row per (as-of date, account) in the current score window: probability,
                           band, priority, lineage. Each scoring run replaces the whole window
     ml.risk_reasons       the features that pushed each score up, with their values
+    ml.score_runs         one row per scoring run (append-only)
+    ml.score_log          the latest date's rows each run, for accounts whose shown score changed (append-only):
+    ml.reason_log         what a CSM was actually shown, and what agent evidence cites
 Model files live in MODEL_DIR/<version>/.
 
 Design choices worth knowing:
@@ -98,6 +101,8 @@ MISSING_TEXT = {"days_since_last_usage": "No product use in 180+ days",
 # Windows count monthly training dates back from the newest one with a complete label; see split().
 SPLIT = dict(test_months=3, valid_months=3, horizon_days=90)
 BANDS = dict(red_enter=0.25, red_exit=0.18, yellow_enter=0.10, yellow_exit=0.07, red_confirm_runs=2)
+# Score dates come 27 weekly from gold; the latest 14 are kept and shown, the rest only warm up the bands.
+SHOWN_SCORE_DATES = 14
 PER_TENANT_MIN_POSITIVES = 50
 PROMOTION = dict(min_gain_over_rules=0.0, max_loss_vs_production=0.005)
 
@@ -299,6 +304,12 @@ def ensure_ml_schema(con):
     con.execute("""create table if not exists ml.risk_reasons (
         as_of date, tenant_id varchar, account_id varchar, model_version varchar, reason_rank integer,
         feature varchar, feature_value double, contribution double, reason varchar)""")
+    # Append-only history of what was shown: one row per scoring run, and the latest-date rows that changed.
+    con.execute("""create table if not exists ml.score_runs (
+        run_id varchar primary key, model_version varchar, as_of date, data_as_of date, scored_at timestamptz,
+        accounts integer, logged integer)""")
+    con.execute("create table if not exists ml.score_log as select ''::varchar as run_id, * from ml.risk_scores limit 0")
+    con.execute("create table if not exists ml.reason_log as select ''::varchar as run_id, * from ml.risk_reasons limit 0")
 
 
 def production_model(con):
@@ -449,6 +460,32 @@ def reasons(booster, df, version, top=3):
                                       "feature_value", "contribution", "reason"])
 
 
+def log_latest(con, run_id, version) -> int:
+    """Append the latest score date to ml.score_log, but only for accounts whose shown score changed since
+    their last logged row: a new score date, another model, a different probability (to 4 places), band,
+    status, rank or notice. A rerun on unchanged data logs nothing. Their reasons go to ml.reason_log under
+    the same run_id, which agent evidence cites, so a brief keeps pointing at the numbers it quoted."""
+    con.execute("""
+        insert into ml.score_log
+        select ?, c.* from ml.risk_scores c
+        left join (select * from ml.score_log
+                   qualify row_number() over (partition by tenant_id, account_id order by scored_at desc) = 1) l
+          on l.tenant_id = c.tenant_id and l.account_id = c.account_id
+        where c.as_of = (select max(as_of) from ml.risk_scores)
+          and (l.account_id is null or l.as_of <> c.as_of or l.model_version <> c.model_version
+               or round(l.risk_prob, 4) <> round(c.risk_prob, 4) or l.band <> c.band or l.status <> c.status
+               or l.rank_in_book <> c.rank_in_book or l.notices is distinct from c.notices)""", [run_id])
+    con.execute("""
+        insert into ml.reason_log
+        select ?, r.* from ml.risk_reasons r
+        join ml.score_log l on l.run_id = ? and l.tenant_id = r.tenant_id and l.account_id = r.account_id and l.as_of = r.as_of""",
+                [run_id, run_id])
+    logged = con.execute("select count(*) from ml.score_log where run_id = ?", [run_id]).fetchone()[0]
+    con.execute("""insert into ml.score_runs select ?, ?, max(as_of), max(data_as_of), now(), count(*) filter (where as_of = (select max(as_of) from ml.risk_scores)), ?
+                   from ml.risk_scores""", [run_id, version, logged])
+    return logged
+
+
 def score():
     with connect(read_only=True) as con:
         version = production_model(con) if con.execute(
@@ -465,7 +502,12 @@ def score():
     s = df[["as_of", "tenant_id", "account_id", "account_name", "owner_id", "currency", "arr", "days_to_renewal",
             "feature_cutoff", "data_as_of", "sources_with_signal_90d"] + NOTICES].copy()
     s["risk_prob"] = prob
+    # Bands walk the whole 27-date series, then only the latest 14 dates are kept: starting every account
+    # at green 26 weeks back, rather than 13, means an account red for months doesn't show yellow just
+    # because the window began after it turned red.
     s = bands_with_hysteresis(s)
+    shown = df.as_of.isin(sorted(df.as_of.unique())[-SHOWN_SCORE_DATES:])
+    s, df = s[shown], df[shown]
     notice = s[NOTICES].astype(bool)
     s["notices"] = notice.apply(lambda r: ", ".join(n.replace("notice_", "").replace("_", " ") for n, on in r.items() if on), axis=1)
     s["status"] = np.where(notice.any(axis=1), "customer_notice",
@@ -490,6 +532,8 @@ def score():
     # Replace the whole window, not just this run's dates: score dates step back from the data date, so
     # when it moves by a day the previous run's dates would otherwise stay behind and "last week" would
     # compare against yesterday, scored by another model. One transaction: readers never see it half-written.
+    # The latest date is also appended to the score log, so what a CSM was shown survives the rewrite.
+    run_id = f"score-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}"
     with connect() as con:
         ensure_ml_schema(con)
         dates = s.as_of.unique()
@@ -500,7 +544,9 @@ def score():
         con.execute("delete from ml.risk_reasons")
         con.execute("insert into ml.risk_scores select * from s")
         con.execute("insert into ml.risk_reasons select * from r")
+        logged = log_latest(con, run_id, version)
         con.execute("commit")
+    print(f"{run_id}: logged {logged:,} changed accounts")
     latest = s[s.as_of == s.as_of.max()]
     print(f"{version} scored {len(s):,} rows over {len(dates)} dates; latest {latest.as_of.max()}: "
           f"{latest.band.value_counts().to_dict()} | status {latest.status.value_counts().to_dict()}")

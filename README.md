@@ -145,8 +145,9 @@ Monthly snapshots train the model; weekly snapshots over the last 13 weeks are s
 
 | Table | Contents |
 |---|---|
-| `ml.risk_scores` | Probability, band (red/yellow/green with hysteresis: red needs two runs in a row above 0.25 and holds until below 0.18), status (`scored`, `insufficient_data`, `customer_notice`), priority (risk × ARR in USD × up to 2× near renewal), rank in the CSM's book, `model_version`, `feature_cutoff`, `data_as_of` |
+| `ml.risk_scores` | The current 14 weekly score dates, replaced on every run. Probability, band (red/yellow/green with hysteresis: red needs two weekly scores in a row above 0.25 and holds until below 0.18; the hysteresis walks 26 weeks, so a band doesn't depend on where the shown window starts), status (`scored`, `insufficient_data`, `customer_notice`), priority (risk × ARR in USD × up to 2× near renewal), rank in the CSM's book, `model_version`, `feature_cutoff`, `data_as_of` |
 | `ml.risk_reasons` | Top 3 features pushing each score up, with exact TreeSHAP contributions and plain text such as "Champion has left" or "Usage at 34% of its prior level" |
+| `ml.score_runs`, `ml.score_log`, `ml.reason_log` | Append-only history of what was shown. Each run logs the latest date's score and reasons for accounts whose shown score changed (new date, model, probability, band, status, rank or notice), so a rerun on unchanged data logs nothing. Agent evidence cites these rows. |
 
 Each CSM's list is ordered by tier (notice, then red, then yellow, then the rest) and by revenue at
 risk within each tier.
@@ -177,7 +178,8 @@ scoring run. Per run (`pipeline/agent.py`):
    - sit in a CSM's top 3 while flagged, or
    - are dark within 45 days of renewal.
 
-   It skips accounts already handled for that score date and caps the run at `AGENT_MAX_CASES`
+   It skips accounts already handled for that score date, and accounts reviewed in the 7 days before
+   it (`AGENT_COOLDOWN_DAYS`) unless they newly gave notice or newly entered red. It caps the run at `AGENT_MAX_CASES`
    (default 12, the cost cap) and 3 per CSM. The leftovers wait for the next run.
 2. **Investigate (Claude, `ANTHROPIC_MODEL`, default `claude-opus-5-5`).** Claude uses six read-only
    tools: risk summary, support history, usage, billing, relationship and open work.
@@ -219,7 +221,8 @@ docker compose exec airflow-scheduler airflow dags trigger account_agent --conf 
 
 **Tracing a brief:**
 - `agent.cases.brief` (sentence + evidence IDs) → `agent.evidence` (fact, `source_table`,
-  `source_key`) → that silver or ml row.
+  `source_key`) → that silver row, or the `ml.score_log` / `ml.reason_log` row of the scoring run
+  it quoted (key `<run_id>/<account>@<as_of>`), which later runs and models never rewrite.
 - `ml.risk_scores` and `ml.risk_reasons` → `gold.account_features` → silver → bronze `_source_file`.
 
 **Secrets:** `ANTHROPIC_API_KEY` is injected at runtime from `.env` (git-ignored, mode 600; see

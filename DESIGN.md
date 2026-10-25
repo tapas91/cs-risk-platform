@@ -41,10 +41,11 @@ anything a customer sees.
 An account's state is four layers, each answering a different question:
 1. **What the systems said, and when we knew it:** silver history.
 2. **The account as the model saw it on a date:** a `gold.account_features` row, built only from data received by that date.
-3. **Risk state** (`ml.risk_scores`):
+3. **Risk state** (`ml.risk_scores`, the current 14 weekly dates):
    - a calibrated probability,
-   - a band with hysteresis (red after two runs ≥ 0.25, held until < 0.18; yellow 0.10 / 0.07),
+   - a band with hysteresis (red after two weekly scores ≥ 0.25, held until < 0.18; yellow 0.10 / 0.07), walked over 26 weeks so it doesn't depend on where the shown window starts,
    - a status: `scored`, `insufficient_data` or `customer_notice`.
+   - **What was shown** is kept apart from the current state: `ml.score_log` appends the latest date's row whenever an account's shown score changes. The current table can be rewritten by a new model; the log can't.
 4. **What we're doing about it:** the agent's case (route, brief, evidence) for that score date.
 
 ### What the model predicts
@@ -74,6 +75,8 @@ An account's state is four layers, each answering a different question:
   - drafts contain no internal terms.
 - **One retry,** then rule-based fallback. That fallback also covers no API key and refusals.
 - **Idempotent outbox** (`agent.actions`). It never changes a score and never contacts a customer.
+- **Evidence cites the score log,** not the current table, so a brief's numbers stay traceable after a new model rescores the same dates.
+- **A 7-day review cooldown:** score dates move with each sync, so without it the same account would get a new review and a new CSM task every day. A new notice or newly entering red skips the wait.
 - **Customer text is marked untrusted.** A planted prompt injection was ignored and flagged.
 
 ### Dashboard

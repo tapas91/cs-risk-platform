@@ -217,6 +217,19 @@ def source_rows(con, v: Viewer, account_id: str, source_table: str, source_key: 
                            from silver.dim_opportunity_history where tenant_id = ? and account_id = ? and valid_from <= ?
                            order by valid_from desc limit 30""", [t, a, cut])
         return "Opportunity history", rows, pd.DataFrame()
+    if source_table in ("ml.score_log", "ml.reason_log"):
+        # key: <run_id>/<account>@<as_of>[#feature]. The logged row is the score as the CSM saw it then,
+        # whatever later runs or models have done to the current table.
+        run_id, as_of = source_key.split("/", 1)[0], source_key.split("@", 1)[1].split("#", 1)[0]
+        if source_table == "ml.score_log":
+            rows = _df(con, """select as_of, model_version, round(risk_prob, 4) as risk_prob, band, status, rank_in_book,
+                                      arr_usd, days_to_renewal, scored_at from ml.score_log
+                               where tenant_id = ? and account_id = ? and run_id = ?""", [t, a, run_id])
+            return f"Score as shown on {as_of} (scoring run {run_id})", rows, pd.DataFrame()
+        rows = _df(con, """select reason_rank, reason, feature, feature_value, round(contribution, 3) as contribution
+                           from ml.reason_log where tenant_id = ? and account_id = ? and run_id = ? order by reason_rank""",
+                   [t, a, run_id])
+        return f"Reasons as shown on {as_of} (scoring run {run_id})", rows, pd.DataFrame()
     if source_table in ("gold.account_features", "ml.risk_scores", "ml.risk_reasons"):
         return "Model inputs behind today's score", features(con, v, account_id), pd.DataFrame()
     if source_table == "agent.cases":

@@ -9,7 +9,8 @@ directly, the agent opens the warehouse outside Airflow's duckdb pool and a pipe
 What it does, per run:
   1. Triage (SQL, no model): from the latest scores, pick accounts that newly gave notice, newly entered
      red, jumped 10+ points in a week, sit at the top of a CSM's book while flagged, or are dark close
-     to renewal. Skip any account already handled for this as-of date. Cap per CSM and per run.
+     to renewal. Skip any account already handled for this as-of date, or reviewed in the 7 days before
+     it unless it newly gave notice or newly entered red. Cap per CSM and per run.
   2. Investigate: Claude (ANTHROPIC_MODEL, default claude-opus-5-5) calls read-only tools bound to the
      case (pipeline/agent_tools.py) and returns a JSON decision: a route, a brief where every sentence
      cites evidence IDs, and an optional outreach draft.
@@ -38,6 +39,10 @@ WAREHOUSE = os.environ.get("WAREHOUSE_PATH", "warehouse/warehouse.duckdb")
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
 MAX_CASES = int(os.environ.get("AGENT_MAX_CASES", "12"))
 MAX_PER_CSM = int(os.environ.get("AGENT_MAX_PER_CSM", "3"))
+# Score dates move with every sync, so without this an account flagged on Monday is reviewed again on
+# Tuesday. Counted in score dates, not wall-clock time, so a replay behaves the same.
+COOLDOWN_DAYS = int(os.environ.get("AGENT_COOLDOWN_DAYS", "7"))
+ALWAYS_REVIEW = ("new_notice", "entered_red")  # a worse state than at the last review: never wait
 MAX_TURNS = 12
 WORKERS = 4
 PRICE_PER_MTOK = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-haiku-5-5": (0.10, 0.50)}
@@ -140,11 +145,17 @@ def triage(con):
     if rows.empty:
         return rows
     if con.execute("select count(*) from information_schema.tables where table_schema='agent' and table_name='cases'").fetchone()[0]:
-        done = con.execute("select tenant_id, account_id, as_of from agent.cases").df()
-        if not done.empty:
-            done["as_of"] = done.as_of.astype(str)
-            rows["_k"] = rows.tenant_id + "|" + rows.account_id + "|" + rows.as_of.astype(str)
-            rows = rows[~rows._k.isin(done.tenant_id + "|" + done.account_id + "|" + done.as_of)].drop(columns="_k")
+        # Skip accounts reviewed within COOLDOWN_DAYS of this score date (which includes this date itself),
+        # unless the trigger says things got worse since.
+        recent = con.execute("""select distinct tenant_id, account_id from agent.cases
+                                where as_of > ?::date - ?::integer and as_of <= ?::date""",
+                             [rows.as_of.max(), COOLDOWN_DAYS, rows.as_of.max()]).df()
+        if not recent.empty:
+            key = rows.tenant_id + "|" + rows.account_id
+            cooling = key.isin(recent.tenant_id + "|" + recent.account_id) & ~rows.trigger.isin(ALWAYS_REVIEW)
+            same_date = key.isin(con.execute("select tenant_id || '|' || account_id from agent.cases where as_of = ?",
+                                             [rows.as_of.max()]).df().iloc[:, 0])
+            rows = rows[~(cooling | same_date)]
     rows["_t"] = rows.trigger.map({t: i for i, t in enumerate(TRIGGER_ORDER)})
     rows = rows.sort_values(["_t", "priority"], ascending=[True, False])
     rows["_n"] = rows.groupby(["tenant_id", rows.owner_id.fillna("unassigned")]).cumcount()
