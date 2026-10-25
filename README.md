@@ -128,10 +128,15 @@ Monthly snapshots train the model; weekly snapshots over the last 13 weeks are s
 
 **Training (`pipeline/risk_model.py`):**
 - LightGBM, compared against logistic regression and a hand-written rules baseline.
-- Split by date: test is January–July 2026. Training rows whose 90-day outcome window overlaps
-  validation are dropped (a purge gap).
-- Isotonic calibration, per tenant where the tenant has 50+ positives (Helio and Northwind), pooled
-  otherwise.
+- Rolling windows by date, counted back from the newest month with a complete 90-day label: test is
+  the last 3 months (now May–July 2026), validation the 3 before, training everything earlier. A
+  90-day gap separates each window (a purge gap). The windows move forward each month, so a retrain
+  learns from about one more month; the dates each model used are stored with it.
+- Accounts that had already given notice are left out of training and evaluation: they are nearly all
+  positives, and they're shown to the CSM first anyway.
+- Platt calibration (a logistic curve over the model's log-odds), fit on half the validation accounts:
+  the half early stopping didn't see. Per tenant where the tenant has 50+ positives in that half, pooled
+  otherwise (today: pooled for all).
 - **Promotion gate:** a new model replaces production only if it beats the rules baseline and doesn't
   lose more than 0.005 PR-AUC to the current model on the same test window. Every decision is logged
   in `ml.model_registry`.
@@ -151,11 +156,12 @@ risk within each tier.
 → bronze `_source_file`.
 
 **Results** (full detail in `MODEL_REPORT.md`):
-- On the test window: PR-AUC 0.29 against 0.04 for the rules, at a 2.8% base rate. A CSM's top 10
-  holds 1.4 real outcomes, against 0.3 at random. 71% of all outcomes appear on some CSM's top-10 list.
-- Of accounts that truly churned in the test window, 81% were on their CSM's list in the 90 days
-  before, with a median 66–72 days' warning. The rules caught 53%.
-- Weakest on payment failures (45%): those happen within weeks, and monthly snapshots are too coarse.
+- On the test window (accounts with a notice left out): PR-AUC 0.28 against 0.18 for logistic
+  regression and 0.03 for the rules, at a 2.2% base rate. A CSM's top 10 holds 1.2 real outcomes,
+  against 0.2 at random. 71% of all outcomes appear on some CSM's top-10 list.
+- Of accounts that truly churned in the test window, 80% were on their CSM's list in the 90 days
+  before, with a median 68–75 days' warning. The rules caught 47%.
+- Weakest on payment failures (35%): those happen within weeks, and monthly snapshots are too coarse.
 - `days_to_renewal` is its strongest input. Part of the lift is "renewal is close", which a CSM
   already knows.
 

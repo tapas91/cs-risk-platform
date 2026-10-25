@@ -51,8 +51,10 @@ An account's state is four layers, each answering a different question:
 - **Target:** churn or downsize (20%+ seats lost) **within 90 days**, for live customers. That's long enough to act and short enough to be honest. Downsell counts, because losing half the seats is a loss too.
 - **Labels** come from what the business recorded (Stripe cancellation, lost renewal, Former Customer status, seat drop), never from the generator's answers. They match all 639 real churns.
 - **Not inputs:** customer notices (known risk, shown to the CSM, not predicted) and CSM save plays (they react to risk already seen).
-- **Model:** LightGBM, over logistic regression and over an LLM's judgment. Tabular data, rare positives (2.8%); trees learn interactions and give an exact per-score explanation (TreeSHAP).
-- **Calibration:** isotonic on validation, per tenant where a tenant has 50+ positives.
+- **Model:** LightGBM, over logistic regression and over an LLM's judgment. Tabular data, rare positives (2–3%); trees learn interactions and give an exact per-score explanation (TreeSHAP).
+- **Evaluation population:** accounts that already gave notice are left out of training and test. They're nearly all positives and would inflate every metric; the model is judged on early warning only.
+- **Windows:** rolling, counted back from the newest month with a complete label (test 3 months, validation 3, training the rest, 90-day gaps between), so each monthly retrain learns from one more month.
+- **Calibration:** Platt (a logistic curve over the model's log-odds) on half the validation accounts, the half early stopping didn't see; per tenant where a tenant has 50+ positives. Isotonic was tried and dropped: on ~100 positives it overfit into steps whose ties cost ranking quality (PR-AUC 0.24 vs 0.28 for the same model).
 - **Ranking:** probability × ARR × up to 2× within 180 days of renewal. Notices first, then red, then yellow.
 
 ### How unattended work is triggered
@@ -84,7 +86,7 @@ An account's state is four layers, each answering a different question:
 |---|---|
 | Data | `verify_blueprint.py`: all 27 designed edge cases present, with counts |
 | Pipeline | `verify_warehouse.py`: 15 checks against the lake and ground truth (exactly-once, dedupe, merges, no cross-tenant links, identity precision 99.96%, stalled feed flagged, agent briefs cited) |
-| Model | Time-based test window. PR-AUC 0.29 vs 0.04 for rules; top-10 precision 14.3% vs a 2.8% base rate; 81% of real churners listed in the 90 days before, with a median 66–72 days' warning. Calibration table, trap-group false alarms, ablation (`MODEL_REPORT.md`) |
+| Model | Rolling time-based test window, notice accounts left out. PR-AUC 0.28 vs 0.18 for logistic regression and 0.03 for rules; top-10 precision 11.5% vs a 2.2% base rate; 80% of real churners listed in the 90 days before, with a median 68–75 days' warning. Calibration table, trap-group false alarms, ablation (`MODEL_REPORT.md`) |
 | Agent | Code validation of every brief, prompt-injection test, per-case `decided_by` and validation status, cost per run |
 | Dashboard | Tenant-isolation tests; headless app tests in a clean container |
 

@@ -12,14 +12,19 @@ Reads gold.account_features / gold.account_labels (built by dbt) and writes to t
 Model files live in MODEL_DIR/<version>/.
 
 Design choices worth knowing:
-  * Time-based split with a purge gap: training rows whose 90-day outcome window overlaps the
-    validation period are dropped, so the model never learns from outcomes it is validated on.
+  * Rolling time windows with purge gaps (split()): test is the newest three months with complete
+    labels, validation the three before, training everything earlier. They move forward as labels
+    mature, so each monthly retrain learns from about one more month, and no fold learns outcomes
+    that land in a later one.
   * Notices (cancellation requests, scheduled cancellations, agent risk flags) and CSM save plays are
-    not inputs. They are known risk, shown to the CSM separately; the model is for early warning.
-  * The probability is calibrated (isotonic, on validation), per tenant where a tenant has enough
-    positives, so 0.30 means roughly 30% of such accounts churn or downsell within 90 days.
+    not inputs, and accounts with a notice are left out of training and evaluation altogether. They are
+    known risk, shown to the CSM separately; the model is for early warning.
+  * The probability is calibrated (Platt: a logistic curve over the model's log-odds) on half the
+    validation accounts, the half the booster's early stopping didn't see, per tenant where a tenant
+    has enough positives, so 0.30 means roughly 30% of such accounts churn or downsell within 90 days.
   * Reasons are exact per-prediction feature contributions from the trees (TreeSHAP, built into LightGBM).
 """
+import hashlib
 import json
 import os
 import pickle
@@ -33,7 +38,6 @@ import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 from sklearn.pipeline import Pipeline
@@ -91,7 +95,8 @@ MISSING_TEXT = {"days_since_last_usage": "No product use in 180+ days",
                 "email_response_ratio_90d": "We sent no email in 90 days", "seat_trend_90d": "No seat history",
                 "avg_resolution_hours_90d": "No tickets solved in 90 days", "subscribed_seats": "No subscription on record"}
 
-SPLIT = dict(valid_start="2025-07-01", test_start="2026-01-01", horizon_days=90)
+# Windows count monthly training dates back from the newest one with a complete label; see split().
+SPLIT = dict(test_months=3, valid_months=3, horizon_days=90)
 BANDS = dict(red_enter=0.25, red_exit=0.18, yellow_enter=0.10, yellow_exit=0.07, red_confirm_runs=2)
 PER_TENANT_MIN_POSITIVES = 50
 PROMOTION = dict(min_gain_over_rules=0.0, max_loss_vs_production=0.005)
@@ -104,13 +109,19 @@ def connect(read_only=False):
 
 
 def load_training() -> pd.DataFrame:
+    """Labelled monthly snapshots, without accounts that had already given notice on that date. Those are
+    nearly all positives and are shown to the CSM first whatever the score; keeping them would teach the
+    model proxies for "the customer told us" and inflate every metric. The model is judged on early warning."""
     with connect(read_only=True) as con:
-        return con.execute("""
+        df = con.execute("""
             select f.*, l.label, l.next_event_type, l.next_event_at
             from gold.account_features f
             join gold.account_labels l using (as_of, tenant_id, account_id)
             where f.purpose = 'train' and l.label_complete
             order by f.as_of""").df()
+    notice = df[NOTICES].fillna(False).astype(bool).any(axis=1)
+    print(f"left out {int(notice.sum()):,} rows with a customer notice ({int(df.label[notice].sum())} of them positive)")
+    return df[~notice]
 
 
 def prepare(df: pd.DataFrame) -> pd.DataFrame:
@@ -123,14 +134,32 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def split(df: pd.DataFrame):
-    """Train / validation / test by as-of date, purging training rows whose outcome window reaches validation."""
+    """Rolling train / validation / calibration / test windows that move forward as labels mature.
+
+    test:        the newest test_months as-of dates with a complete label
+    validation:  the valid_months dates before that whose 90-day outcome window ends before test starts
+    train:       every earlier date whose outcome window ends before validation starts
+    The gaps (purges) keep a fold from learning outcomes that land in a later fold. Validation accounts
+    are halved by a stable hash: one half stops boosting early, the other fits the calibration, so the
+    calibration isn't fit on predictions the booster was tuned on. Halving by account rather than by date
+    keeps one account out of both halves and costs no extra purge gap."""
     as_of = pd.to_datetime(df.as_of)
-    valid_start, test_start = pd.Timestamp(SPLIT["valid_start"]), pd.Timestamp(SPLIT["test_start"])
     purge = pd.Timedelta(days=SPLIT["horizon_days"])
-    train = df[as_of + purge <= valid_start]
-    valid = df[(as_of >= valid_start) & (as_of + purge <= test_start)]
-    test = df[as_of >= test_start]
-    return train, valid, test
+    dates = sorted(as_of.unique())
+    test_dates = dates[-SPLIT["test_months"]:]
+    valid_dates = [d for d in dates if d + purge <= test_dates[0]][-SPLIT["valid_months"]:]
+    train_dates = [d for d in dates if valid_dates and d + purge <= valid_dates[0]]
+    if len(test_dates) < SPLIT["test_months"] or len(valid_dates) < SPLIT["valid_months"] or not train_dates:
+        raise ValueError(f"not enough labelled history to train: {len(dates)} monthly dates, need "
+                         f"{SPLIT['test_months']} test + {SPLIT['valid_months']} validation + training, with "
+                         f"{SPLIT['horizon_days']}-day gaps between them")
+    valid = df[as_of.isin(valid_dates)]
+    key = valid.tenant_id + "|" + valid.account_id
+    calibration_half = key.map(lambda k: int(hashlib.md5(k.encode()).hexdigest(), 16) % 2 == 1)
+    day = lambda d: str(pd.Timestamp(d).date())
+    windows = dict(train=[day(train_dates[0]), day(train_dates[-1])], valid=[day(valid_dates[0]), day(valid_dates[-1])],
+                   test=[day(test_dates[0]), day(test_dates[-1])], **SPLIT)
+    return df[as_of.isin(train_dates)], valid[~calibration_half], valid[calibration_half], df[as_of.isin(test_dates)], windows
 
 
 # ------------------------------------------------------------------ models
@@ -178,19 +207,38 @@ def fit_lightgbm(train, valid):
                      callbacks=[lgb.early_stopping(100, verbose=False)])
 
 
+class Platt:
+    """A logistic curve over the booster's log-odds. Two parameters, so it stays stable on the ~100
+    positives a calibration half holds, where isotonic overfits into steps; and strictly increasing, so
+    the CSM's ranked list is exactly the model's ranking, with no ties."""
+
+    def fit(self, raw, y):
+        self.lr = LogisticRegression(C=1e6).fit(_log_odds(raw), y)
+        return self
+
+    def predict(self, raw):
+        return self.lr.predict_proba(_log_odds(raw))[:, 1]
+
+
+def _log_odds(p):
+    p = np.clip(np.asarray(p, dtype=float), 1e-6, 1 - 1e-6)
+    return np.log(p / (1 - p))[:, None]
+
+
 class Calibrator:
-    """Isotonic calibration on validation predictions; per tenant when a tenant has enough positives."""
+    """Platt calibration on the calibration half's predictions; per tenant when a tenant has enough positives.
+    Models trained before Platt hold isotonic curves here; both expose predict(), so they still load and score."""
 
     def __init__(self):
         self.global_ = None
         self.by_tenant = {}
 
     def fit(self, raw, y, tenants):
-        self.global_ = IsotonicRegression(out_of_bounds="clip").fit(raw, y)
+        self.global_ = Platt().fit(raw, y)
         for t in np.unique(tenants):
             m = tenants == t
             if y[m].sum() >= PER_TENANT_MIN_POSITIVES:
-                self.by_tenant[t] = IsotonicRegression(out_of_bounds="clip").fit(raw[m], y[m])
+                self.by_tenant[t] = Platt().fit(raw[m], y[m])
         return self
 
     def transform(self, raw, tenants):
@@ -276,11 +324,13 @@ def predict(booster, cal, df):
 
 def train():
     df = load_training()
-    tr, va, te = split(df)
-    print(f"rows: train {len(tr):,} ({tr.label.sum()} positive), valid {len(va):,} ({va.label.sum()}), test {len(te):,} ({te.label.sum()})")
+    tr, va, ca, te, windows = split(df)
+    print(f"windows: {windows}")
+    print(f"rows: train {len(tr):,} ({tr.label.sum()} positive), valid {len(va):,} ({va.label.sum()}), "
+          f"calibration {len(ca):,} ({ca.label.sum()}), test {len(te):,} ({te.label.sum()})")
 
     booster = fit_lightgbm(tr, va)
-    cal = Calibrator().fit(booster.predict(prepare(va)), va.label.astype(int).values, va.tenant_id.values)
+    cal = Calibrator().fit(booster.predict(prepare(ca)), ca.label.astype(int).values, ca.tenant_id.values)
     prob_te, _ = predict(booster, cal, te)
     logit = fit_logistic(tr)
     p_logit = predict_logistic(logit, te)
@@ -302,7 +352,7 @@ def train():
         booster.save_model(str(out / "model.txt"))
         with open(out / "calibrator.pkl", "wb") as f:
             pickle.dump(cal, f)
-        meta = dict(model_version=version, features=FEATURES, categorical=CATEGORICAL, split=SPLIT, bands=BANDS,
+        meta = dict(model_version=version, features=FEATURES, categorical=CATEGORICAL, split=windows, bands=BANDS,
                     metrics=metrics, best_iteration=booster.best_iteration, decision=decision)
         (out / "metadata.json").write_text(json.dumps(meta, indent=2, default=str))
 
@@ -310,7 +360,8 @@ def train():
             con.execute("update ml.model_registry set status = 'retired' where status = 'production'")
         con.execute("insert into ml.model_registry values (?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [version, "production" if promote else "rejected", promote, decision, len(tr), len(va), len(te),
-                     booster.best_iteration, json.dumps(metrics), json.dumps(FEATURES), json.dumps(SPLIT)])
+                     booster.best_iteration, json.dumps(metrics), json.dumps(FEATURES),
+                     json.dumps(dict(windows, calibration_rows=len(ca)))])
         preds = te[["as_of", "tenant_id", "account_id", "owner_id", "label"]].copy()
         preds.insert(0, "model_version", version)
         preds["risk_prob"], preds["logistic_prob"], preds["rules_score"] = prob_te, p_logit, p_rules
