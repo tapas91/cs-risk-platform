@@ -74,6 +74,7 @@ An account's state is four layers, each answering a different question:
   - routes need supporting evidence (billing needs a failed payment, suppression needs work in progress);
   - drafts contain no internal terms.
 - **One retry,** then rule-based fallback. That fallback also covers no API key and refusals.
+- **A failing case costs that case, not the run:** it's recorded and retried next run (up to 3 times), each case is saved as it completes, and every run is recorded as ok, partial or failed.
 - **Idempotent outbox** (`agent.actions`). It never changes a score and never contacts a customer.
 - **Evidence cites the score log,** not the current table, so a brief's numbers stay traceable after a new model rescores the same dates.
 - **A 7-day review cooldown:** score dates move with each sync, so without it the same account would get a new review and a new CSM task every day. A new notice or newly entering red skips the wait.

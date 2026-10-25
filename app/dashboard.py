@@ -324,6 +324,11 @@ def page_team():
         "revenue_at_risk_usd": st.column_config.NumberColumn("Revenue at risk", format="$%d")})
     st.subheader("Agent reviews")
     st.dataframe(D.agent_activity(con(), v), hide_index=True, width="stretch")
+    failed = D.agent_failures(con(), v)
+    if not failed.empty:
+        st.subheader("Reviews that failed")
+        st.caption("The agent couldn't review these accounts. Each is retried on the next run, up to 3 times per score date.")
+        st.dataframe(failed, hide_index=True, width="stretch")
     left, right = st.columns(2)
     left.subheader("Data freshness")
     left.dataframe(D.data_health(con(), v), hide_index=True, width="stretch")

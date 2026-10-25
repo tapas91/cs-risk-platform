@@ -54,6 +54,7 @@ SLIM_TABLES = {
     "agent.cases": "select * from agent.cases",
     "agent.evidence": "select * from agent.evidence",
     "agent.tool_calls": "select * from agent.tool_calls",
+    "agent.failures": "select * from agent.failures",
     "ops.source_freshness": "select * from ops.source_freshness",
     "ops.quarantine_identity": "select * from ops.quarantine_identity",
     "silver.fct_ticket": "select * from silver.fct_ticket",
@@ -83,6 +84,9 @@ def publish_slim():
     for name, sql in SLIM_TABLES.items():
         schema, table = name.split(".")
         con.execute(f"create schema if not exists {schema}")
+        if not con.execute("select count(*) from duckdb_tables() where database_name = 'w' and schema_name = ? and table_name = ?",
+                           [schema, table]).fetchone()[0]:
+            continue  # a table newer than this warehouse (agent.failures before the agent's first run since it was added)
         sql = sql if " w." in sql else sql.replace(" from ", " from w.", 1)  # entries with subqueries name w. themselves
         con.execute(f"create table {name} as {sql}")
     con.execute("create schema if not exists app")

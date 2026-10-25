@@ -284,6 +284,25 @@ def agent_activity(con, v: Viewer) -> pd.DataFrame:
                        where c.tenant_id = ? order by c.created_at desc""", [v.tenant_id])
 
 
+def agent_failures(con, v: Viewer) -> pd.DataFrame:
+    """Accounts the agent tried and still hasn't reviewed for that score date, latest first, with how many
+    times it tried. A failure a later run resolved isn't listed. Empty before the agent.failures table
+    exists (snapshots published before it)."""
+    if not v.is_manager:
+        raise NotVisible("agent failures")
+    if not con.execute("""select count(*) from information_schema.tables
+                          where table_schema = 'agent' and table_name = 'failures'""").fetchone()[0]:
+        return pd.DataFrame()
+    return _df(con, """select f.as_of, coalesce(s.account_name, f.account_id) as account, f.trigger, count(*) as attempts,
+                              max(f.failed_at) as last_failed_at, arg_max(f.error, f.failed_at) as last_error
+                       from agent.failures f
+                       left join ml.risk_scores s on s.tenant_id = f.tenant_id and s.account_id = f.account_id and s.as_of = f.as_of
+                       where f.tenant_id = ?
+                         and not exists (select 1 from agent.cases c where c.tenant_id = f.tenant_id
+                                         and c.account_id = f.account_id and c.as_of = f.as_of)
+                       group by all order by last_failed_at desc""", [v.tenant_id])
+
+
 def data_health(con, v: Viewer) -> pd.DataFrame:
     return _df(con, """select source_table, freshness_status, hours_behind, last_synced_at, files, rows_landed
                        from ops.source_freshness where tenant_id = ? order by hours_behind desc""", [v.tenant_id])

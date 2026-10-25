@@ -122,6 +122,15 @@ if has_agent:
           f"{cases} cases ({', '.join(f'{k} {v}' for k, v in by.items())}); {uncited} uncited sentences, {dangling} citations "
           f"to missing evidence, {sent} drafts sent, {dup} duplicate actions")
 
+# 14. agent runs are recorded honestly: the latest run finished, and failed cases are counted, not lost
+if has_agent:
+    runs = dict(q("select status, count(*) from agent.runs group by 1"))
+    latest = q("select status from agent.runs order by started_at desc limit 1")[0][0]
+    has_failures = q("select count(*) from information_schema.tables where table_schema = 'agent' and table_name = 'failures'")[0][0]
+    failed_cases = q("select count(*) from agent.failures")[0][0] if has_failures else 0
+    check("agent: runs recorded honestly", latest in ("ok", "partial"),
+          f"latest run {latest}; runs by status {runs}; {failed_cases} failed case attempts recorded for retry")
+
 w = max(len(r[0]) for r in results)
 for name, status, detail in results:
     print(f"{status}  {name.ljust(w)}  {detail}")

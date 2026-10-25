@@ -224,6 +224,11 @@ scoring run. Per run (`pipeline/agent.py`):
    `agent.actions`, keyed on tenant, account and score date. It **never changes a score and never
    contacts a customer**: drafts sit at `draft_awaiting_csm_approval`. `agent.runs` logs mode, token
    use and estimated cost.
+7. **Failures cost one case, not the run.** A case the fallback can't handle either (no score for the
+   date, a tool that errors) goes to `agent.failures`, with no case and no action, and the next run
+   retries it, up to 3 times per score date. Each case is saved as it completes. `agent.runs` records
+   each run as `ok`, `partial` or `failed`; a failed run exits 1 so the Airflow task fails, and the Team
+   overview lists accounts still unreviewed after a failure.
 
 On demand, through Airflow so the run waits for the warehouse pool instead of racing the pipeline:
 
